@@ -101,6 +101,34 @@ On the **General Information** tab, there will be an **Interactions Endpoint URL
 
 Click **Save Changes**, and your app should be ready to run 🚀
 
+## Deploy to Orihost
+
+If you want 24/7 uptime, use GitHub Actions to push your code to Orihost automatically.
+
+1. Add these repository secrets in GitHub:
+   - `ORIHOST_SFTP_HOST`
+   - `ORIHOST_SFTP_USER`
+   - `ORIHOST_SFTP_PASSWORD`
+   - `ORIHOST_SFTP_PORT` (optional)
+   - `ORIHOST_REMOTE_DIR`
+
+2. Keep `.env` out of GitHub. Use Orihost environment settings or create a `.env` file on the server.
+
+3. The workflow in `.github/workflows/deploy.yml` will upload your project files to Orihost on every push to `main`.
+
+4. In Orihost, set the app start command to:
+```
+npm install
+npm run start
+```
+
+5. After deployment, register the slash commands once from the server:
+```
+npm run register
+```
+
+> If Orihost supports automatic node startup, use that instead of `pm2`.
+
 ## Other resources
 - Read **[the documentation](https://discord.com/developers/docs/intro)** for in-depth information about API features.
 - Browse the `examples/` folder in this project for smaller, feature-specific code examples

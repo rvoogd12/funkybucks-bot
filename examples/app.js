@@ -24,7 +24,7 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
         type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
         data: {
           flags: InteractionResponseFlags.IS_COMPONENTS_V2,
-          content: `Hi! Time to make some funkybucks... ${getRandomEmoji()} \n-# Or spend some...`,
+          content: `Hi! Time to make some funkybucks... ${getRandomEmoji()} \n-# Or spend some... >:3`,
         },
       });
     }
