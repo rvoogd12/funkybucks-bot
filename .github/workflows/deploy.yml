@@ -24,15 +24,14 @@ jobs:
           HOST="${HOST%/}"
           echo "Deploying to $HOST:$SFTP_PORT -> $REMOTE_DIR"
           sudo apt-get update
-          sudo apt-get install -y sshpass rsync
-          echo "Checking SSH login to $HOST..."
-          sshpass -p "$SFTP_PASSWORD" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p ${SFTP_PORT:-22} "$SFTP_USER@$HOST" "echo SSH OK"
-          echo "SSH login succeeded, starting rsync..."
-          sshpass -p "$SFTP_PASSWORD" rsync -avz --delete \
-            --exclude '.git' \
-            --exclude '.github' \
-            --exclude 'node_modules' \
-            --exclude '.env' \
-            --exclude 'data' \
-            -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p ${SFTP_PORT:-22}" \
-            ./ "$SFTP_USER@$HOST:$REMOTE_DIR"
+          sudo apt-get install -y sshpass lftp
+          echo "Checking SFTP login to $HOST..."
+          printf "bye\n" | sshpass -p "$SFTP_PASSWORD" sftp -oBatchMode=no -oStrictHostKeyChecking=no -oPort=${SFTP_PORT:-22} "$SFTP_USER@$HOST"
+          echo "SFTP login succeeded, starting lftp mirror..."
+          cat > /tmp/lftp-commands.txt <<'EOF'
+set sftp:auto-confirm yes
+set sftp:connect-program "ssh -a -x -o BatchMode=no -o StrictHostKeyChecking=no -p %p"
+mirror --reverse --delete --verbose ./ "$REMOTE_DIR"
+bye
+EOF
+          lftp -d "sftp://$SFTP_USER:$SFTP_PASSWORD@$HOST:${SFTP_PORT:-22}" -f /tmp/lftp-commands.txt
