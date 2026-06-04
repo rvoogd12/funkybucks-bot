@@ -25,6 +25,9 @@ jobs:
           echo "Deploying to $HOST:$SFTP_PORT -> $REMOTE_DIR"
           sudo apt-get update
           sudo apt-get install -y sshpass rsync
+          echo "Checking SSH login to $HOST..."
+          sshpass -p "$SFTP_PASSWORD" ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p ${SFTP_PORT:-22} "$SFTP_USER@$HOST" "echo SSH OK"
+          echo "SSH login succeeded, starting rsync..."
           sshpass -p "$SFTP_PASSWORD" rsync -avz --delete \
             --exclude '.git' \
             --exclude '.github' \
