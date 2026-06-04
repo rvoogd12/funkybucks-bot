@@ -11,14 +11,18 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Deploy via SFTP
-        uses: wlixcc/SFTP-Deploy-Action@v1.2.0
-        with:
-          server: de-02.orihost.com
-          port: 2022
-          username: ${{ secrets.ORIHOST_SFTP_USER }}
-          password: ${{ secrets.ORIHOST_SFTP_PASSWORD }}
-          local_path: ./
-          remote_path: ${{ secrets.ORIHOST_REMOTE_DIR }}/
-          delete: false
-          sftpArgs: -o IdentitiesOnly=yes
+      - name: Deploy via SFTP (lftp)
+        env:
+          SFTP_HOST: ${{ secrets.ORIHOST_SFTP_HOST }}
+          SFTP_USER: ${{ secrets.ORIHOST_SFTP_USER }}
+          SFTP_PASSWORD: ${{ secrets.ORIHOST_SFTP_PASSWORD }}
+          SFTP_PORT: ${{ secrets.ORIHOST_SFTP_PORT }}
+          REMOTE_DIR: ${{ secrets.ORIHOST_REMOTE_DIR }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lftp
+          lftp -u "$SFTP_USER","$SFTP_PASSWORD" -p "${SFTP_PORT:-22}" "sftp://$SFTP_HOST" <<'EOF'
+          set sftp:auto-confirm yes
+          mirror --reverse --delete --verbose ./ "$REMOTE_DIR"
+          bye
+          EOF
