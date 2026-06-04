@@ -18,7 +18,7 @@ jobs:
           username: ${{ secrets.ORIHOST_SFTP_USER }}
           password: ${{ secrets.ORIHOST_SFTP_PASSWORD }}
           local-dir: ./
-          server-dir: ${{ secrets.ORIHOST_REMOTE_DIR }}
+          server-dir: ${{ secrets.ORIHOST_REMOTE_DIR }}/
           exclude: |
             **/.git/**
             **/.github/**
