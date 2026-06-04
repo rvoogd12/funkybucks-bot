@@ -20,7 +20,9 @@ jobs:
           REMOTE_DIR: ${{ secrets.ORIHOST_REMOTE_DIR }}
         run: |
           set -e
-          echo "Deploying to $SFTP_HOST:$SFTP_PORT -> $REMOTE_DIR"
+          HOST="${SFTP_HOST#sftp://}"
+          HOST="${HOST%/}"
+          echo "Deploying to $HOST:$SFTP_PORT -> $REMOTE_DIR"
           sudo apt-get update
           sudo apt-get install -y sshpass rsync
           sshpass -p "$SFTP_PASSWORD" rsync -avz --delete \
@@ -29,5 +31,5 @@ jobs:
             --exclude 'node_modules' \
             --exclude '.env' \
             --exclude 'data' \
-            -e "ssh -o StrictHostKeyChecking=no -p ${SFTP_PORT:-22}" \
-            ./ "$SFTP_USER@$SFTP_HOST:$REMOTE_DIR"
+            -e "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p ${SFTP_PORT:-22}" \
+            ./ "$SFTP_USER@$HOST:$REMOTE_DIR"
