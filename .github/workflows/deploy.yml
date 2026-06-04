@@ -24,13 +24,7 @@ jobs:
           HOST="${HOST%/}"
           echo "Deploying to $HOST:$SFTP_PORT -> $REMOTE_DIR"
           sudo apt-get update
-          sudo apt-get install -y sshpass lftp
-          echo "Checking SFTP login to $HOST..."
-          printf "bye\n" | sshpass -p "$SFTP_PASSWORD" sftp -oBatchMode=no -oStrictHostKeyChecking=no -oPort=${SFTP_PORT:-22} "$SFTP_USER@$HOST"
-          echo "SFTP login succeeded, starting lftp mirror..."
-          sshpass -p "$SFTP_PASSWORD" lftp -d -u "$SFTP_USER" "sftp://$HOST:${SFTP_PORT:-22}" <<-'LFTPCMDS'
-          set sftp:auto-confirm yes
-          set sftp:connect-program "ssh -a -x -o BatchMode=no -o StrictHostKeyChecking=no -p %p"
-          mirror --reverse --delete --verbose ./ "$REMOTE_DIR"
-          bye
-          LFTPCMDS
+          sudo apt-get install -y lftp
+          echo "Starting lftp mirror to $HOST..."
+          lftp -u "$SFTP_USER,$SFTP_PASSWORD" -p ${SFTP_PORT:-22} "sftp://$HOST" \
+            -e "set sftp:auto-confirm yes; set net:timeout 30; mirror --reverse --delete ./ \"$REMOTE_DIR\"; bye"
