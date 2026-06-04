@@ -11,26 +11,17 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Install lftp
-        run: sudo apt-get update && sudo apt-get install -y lftp
-
-      - name: Deploy to Orihost via SFTP
-        env:
-          SFTP_HOST: ${{ secrets.ORIHOST_SFTP_HOST }}
-          SFTP_USER: ${{ secrets.ORIHOST_SFTP_USER }}
-          SFTP_PASSWORD: ${{ secrets.ORIHOST_SFTP_PASSWORD }}
-          SFTP_PORT: ${{ secrets.ORIHOST_SFTP_PORT }}
-          REMOTE_DIR: ${{ secrets.ORIHOST_REMOTE_DIR }}
-        run: |
-          REMOTE_DIR="${REMOTE_DIR:-.}"
-          lftp -u "$SFTP_USER","$SFTP_PASSWORD" -p "${SFTP_PORT:-22}" "sftp://$SFTP_HOST" <<EOF
-          set net:max-retries 2
-          set net:timeout 20
-          set net:reconnect-interval-base 5
-          set sftp:auto-confirm yes
-          mirror --reverse --delete --verbose --exclude-glob .git --exclude-glob .github --exclude-glob node_modules --exclude-glob .env ./ "$REMOTE_DIR"
-          echo "--- remote directory listing ---"
-          cd "$REMOTE_DIR"
-          cls -la
-          bye
-          EOF
+      - name: Deploy via SFTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.4
+        with:
+          server: ${{ secrets.ORIHOST_SFTP_HOST }}
+          username: ${{ secrets.ORIHOST_SFTP_USER }}
+          password: ${{ secrets.ORIHOST_SFTP_PASSWORD }}
+          local-dir: ./
+          server-dir: ${{ secrets.ORIHOST_REMOTE_DIR }}
+          exclude: |
+            **/.git/**
+            **/.github/**
+            **/node_modules/**
+            **/.env
+            **/data/**
