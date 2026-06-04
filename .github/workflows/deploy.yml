@@ -22,8 +22,15 @@ jobs:
           SFTP_PORT: ${{ secrets.ORIHOST_SFTP_PORT }}
           REMOTE_DIR: ${{ secrets.ORIHOST_REMOTE_DIR }}
         run: |
+          REMOTE_DIR="${REMOTE_DIR:-.}"
           lftp -u "$SFTP_USER","$SFTP_PASSWORD" -p "${SFTP_PORT:-22}" "sftp://$SFTP_HOST" <<EOF
+          set net:max-retries 2
+          set net:timeout 20
+          set net:reconnect-interval-base 5
           set sftp:auto-confirm yes
           mirror --reverse --delete --verbose --exclude-glob .git --exclude-glob .github --exclude-glob node_modules --exclude-glob .env ./ "$REMOTE_DIR"
+          echo "--- remote directory listing ---"
+          cd "$REMOTE_DIR"
+          cls -la
           bye
           EOF
