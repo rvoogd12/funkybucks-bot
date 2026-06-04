@@ -79,7 +79,7 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
     const { name, options = [] } = data;
 
     if (name === 'hi') {
-      return res.send(createResponse(`Hi! Time to make some funkybucks... ${getRandomEmoji()} \n-# Or spend some...`));
+      return res.send(createResponse(`Hi! Time to make some funkybucks... ${getRandomEmoji()} \n-# Or spend some... >:3`));
     }
 
     if (name === 'help') {
