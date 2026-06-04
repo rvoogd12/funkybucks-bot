@@ -19,10 +19,14 @@ jobs:
           SFTP_PORT: ${{ secrets.ORIHOST_SFTP_PORT }}
           REMOTE_DIR: ${{ secrets.ORIHOST_REMOTE_DIR }}
         run: |
+          set -e
+          echo "Deploying to $SFTP_HOST:$SFTP_PORT -> $REMOTE_DIR"
           sudo apt-get update
           sudo apt-get install -y lftp
-          lftp -u "$SFTP_USER","$SFTP_PASSWORD" -p "${SFTP_PORT:-22}" "sftp://$SFTP_HOST" <<'EOF'
+          lftp -d -u "$SFTP_USER","$SFTP_PASSWORD" -p "${SFTP_PORT:-22}" "sftp://$SFTP_HOST" <<'EOF'
           set sftp:auto-confirm yes
+          set net:timeout 10
+          set net:max-retries 2
           mirror --reverse --delete --verbose ./ "$REMOTE_DIR"
           bye
           EOF
