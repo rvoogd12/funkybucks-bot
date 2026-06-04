@@ -23,10 +23,4 @@ jobs:
           echo "Deploying to $SFTP_HOST:$SFTP_PORT -> $REMOTE_DIR"
           sudo apt-get update
           sudo apt-get install -y lftp
-          lftp -d -u "$SFTP_USER","$SFTP_PASSWORD" -p "${SFTP_PORT:-22}" "sftp://$SFTP_HOST" <<'EOF'
-          set sftp:auto-confirm yes
-          set net:timeout 10
-          set net:max-retries 2
-          mirror --reverse --delete --verbose ./ "$REMOTE_DIR"
-          bye
-          EOF
+          lftp -d -u "$SFTP_USER","$SFTP_PASSWORD" "sftp://${SFTP_HOST}:${SFTP_PORT:-22}" -e "set sftp:auto-confirm yes; set net:timeout 10; set net:max-retries 2; mirror --reverse --delete --verbose ./ \"$REMOTE_DIR\"; bye"
