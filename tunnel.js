@@ -1,21 +1,40 @@
 import { spawn } from 'child_process';
-import { existsSync } from 'fs';
+import { chmodSync, existsSync, writeFileSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const projectDir = path.dirname(fileURLToPath(import.meta.url));
+const CLOUDFLARED_LINUX_URL = 'https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64';
 
-export function startCloudflareTunnel(port) {
+async function ensureCloudflaredBinary(bin) {
+  if (existsSync(bin)) return true;
+
+  if (process.platform !== 'linux') {
+    console.warn(`cloudflared not found at ${bin} (auto-download only runs on Linux).`);
+    return false;
+  }
+
+  console.log('cloudflared not found — downloading for Linux...');
+  try {
+    const res = await fetch(CLOUDFLARED_LINUX_URL);
+    if (!res.ok) throw new Error(`download failed with HTTP ${res.status}`);
+    const buffer = Buffer.from(await res.arrayBuffer());
+    writeFileSync(bin, buffer);
+    chmodSync(bin, 0o755);
+    console.log('cloudflared downloaded successfully.');
+    return true;
+  } catch (err) {
+    console.error('Failed to download cloudflared:', err.message);
+    return false;
+  }
+}
+
+export async function startCloudflareTunnel(port) {
   const enabled = process.env.USE_CLOUDFLARE_TUNNEL === '1' || process.env.USE_CLOUDFLARE_TUNNEL === 'true';
   if (!enabled) return;
 
   const bin = process.env.CLOUDFLARED_PATH || path.join(projectDir, 'cloudflared');
-  if (!existsSync(bin)) {
-    console.warn(`USE_CLOUDFLARE_TUNNEL is set but cloudflared was not found at ${bin}`);
-    console.warn('On the server, download it with:');
-    console.warn('curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -o cloudflared && chmod +x cloudflared');
-    return;
-  }
+  if (!(await ensureCloudflaredBinary(bin))) return;
 
   const proc = spawn(bin, ['tunnel', '--url', `http://127.0.0.1:${port}`], {
     stdio: ['ignore', 'pipe', 'pipe'],

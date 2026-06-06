@@ -1,0 +1,58 @@
+name: Deploy to Orihost
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Deploy via SFTP
+        env:
+          SFTP_HOST: ${{ secrets.ORIHOST_SFTP_HOST }}
+          SFTP_USER: ${{ secrets.ORIHOST_SFTP_USER }}
+          SFTP_PASSWORD: ${{ secrets.ORIHOST_SFTP_PASSWORD }}
+          SFTP_PORT: ${{ secrets.ORIHOST_SFTP_PORT }}
+          REMOTE_DIR: ${{ secrets.ORIHOST_REMOTE_DIR }}
+        run: |
+          set -euo pipefail
+
+          missing=""
+          [[ -z "${SFTP_HOST:-}" ]] && missing+="ORIHOST_SFTP_HOST "
+          [[ -z "${SFTP_USER:-}" ]] && missing+="ORIHOST_SFTP_USER "
+          [[ -z "${SFTP_PASSWORD:-}" ]] && missing+="ORIHOST_SFTP_PASSWORD "
+          [[ -z "${REMOTE_DIR:-}" ]] && missing+="ORIHOST_REMOTE_DIR "
+          if [[ -n "$missing" ]]; then
+            echo "Missing GitHub secrets: $missing"
+            exit 1
+          fi
+
+          HOST="${SFTP_HOST#sftp://}"
+          HOST="${HOST#ssh://}"
+          HOST="${HOST%/}"
+
+          sudo apt-get update
+          sudo apt-get install -y lftp
+
+          echo "Deploying to $HOST:${SFTP_PORT:-22} -> $REMOTE_DIR"
+
+          lftp -u "$SFTP_USER,$SFTP_PASSWORD" -p "${SFTP_PORT:-22}" "sftp://$HOST" <<EOF
+          set sftp:auto-confirm yes
+          set net:timeout 30
+          set net:max-retries 2
+          mirror --reverse --delete --verbose \
+            -X ^node_modules/ \
+            -X ^\.env$ \
+            -X ^\.git/ \
+            -X ^cloudflared$ \
+            -X ^data/accounts\.json$ \
+            ./ "$REMOTE_DIR"
+          bye
+          EOF
+
+          echo "Deploy finished."
