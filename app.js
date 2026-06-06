@@ -11,6 +11,15 @@ import {
 import { getRandomEmoji, formatNumber } from './utils.js';
 import { addBalance, getBalance, removeBalance, getTopBalances, transferBalance } from './bank.js';
 import { generateLeaderboardImage } from './leaderboard.js';
+import { startCloudflareTunnel } from './tunnel.js';
+
+const requiredEnvVars = ['PUBLIC_KEY', 'DISCORD_TOKEN', 'APP_ID'];
+const missingEnvVars = requiredEnvVars.filter((key) => !process.env[key]);
+if (missingEnvVars.length > 0) {
+  console.error(`Missing required environment variables: ${missingEnvVars.join(', ')}`);
+  console.error('Set them in Orihost startup variables or create a .env file in /home/container/.');
+  process.exit(1);
+}
 
 // Create an express app
 const app = express();
@@ -246,6 +255,8 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
   console.error('unknown interaction type', type);
   return res.status(400).json({ error: 'unknown interaction type' });
 });
+
+startCloudflareTunnel(PORT);
 
 app.listen(PORT, () => {
   console.log('Listening on port', PORT);
