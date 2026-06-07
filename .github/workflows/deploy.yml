@@ -17,7 +17,7 @@ jobs:
           echo "Local files:"
           ls -la
           test -f app.js
-          test -f tunnel.js
+          test -f commands.js
 
       - name: Deploy via SFTP
         env:
@@ -63,7 +63,7 @@ jobs:
             echo "set net:max-retries 2"
             echo "pwd"
             echo "ls"
-            echo "mirror --reverse --delete --verbose -X ^node_modules/ -X ^\\.env$ -X ^\\.git/ -X ^cloudflared$ -X ^data/accounts\\.json$ ./ ${REMOTE}"
+            echo "mirror --reverse --delete --verbose -X ^node_modules/ -X ^\\.env$ -X ^\\.git/ -X ^data/accounts\\.json$ ./ ${REMOTE}"
             echo "ls ${REMOTE}"
             echo "bye"
           } > "$LFTP_SCRIPT"
