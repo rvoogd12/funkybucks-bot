@@ -12,6 +12,13 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      - name: Show files to deploy
+        run: |
+          echo "Local files:"
+          ls -la
+          test -f app.js
+          test -f tunnel.js
+
       - name: Deploy via SFTP
         env:
           SFTP_HOST: ${{ secrets.ORIHOST_SFTP_HOST }}
@@ -26,7 +33,6 @@ jobs:
           [[ -z "${SFTP_HOST:-}" ]] && missing+="ORIHOST_SFTP_HOST "
           [[ -z "${SFTP_USER:-}" ]] && missing+="ORIHOST_SFTP_USER "
           [[ -z "${SFTP_PASSWORD:-}" ]] && missing+="ORIHOST_SFTP_PASSWORD "
-          [[ -z "${REMOTE_DIR:-}" ]] && missing+="ORIHOST_REMOTE_DIR "
           if [[ -n "$missing" ]]; then
             echo "Missing GitHub secrets: $missing"
             exit 1
@@ -36,23 +42,36 @@ jobs:
           HOST="${HOST#ssh://}"
           HOST="${HOST%/}"
 
+          REMOTE="${REMOTE_DIR:-.}"
+          case "$REMOTE" in
+            /home/container|/home/container/)
+              echo "ORIHOST_REMOTE_DIR was $REMOTE — using . instead (SFTP is already chrooted to /home/container)"
+              REMOTE="."
+              ;;
+          esac
+
           sudo apt-get update
           sudo apt-get install -y lftp
 
-          echo "Deploying to $HOST:${SFTP_PORT:-22} -> $REMOTE_DIR"
+          echo "Deploying to $HOST:${SFTP_PORT:-22} -> $REMOTE"
+          echo "Local app.js size: $(wc -c < app.js) bytes"
 
-          lftp -u "$SFTP_USER,$SFTP_PASSWORD" -p "${SFTP_PORT:-22}" "sftp://$HOST" <<EOF
-          set sftp:auto-confirm yes
-          set net:timeout 30
-          set net:max-retries 2
-          mirror --reverse --delete --verbose \
-            -X ^node_modules/ \
-            -X ^\.env$ \
-            -X ^\.git/ \
-            -X ^cloudflared$ \
-            -X ^data/accounts\.json$ \
-            ./ "$REMOTE_DIR"
-          bye
-          EOF
+          LFTP_SCRIPT=$(mktemp)
+          {
+            echo "set sftp:auto-confirm yes"
+            echo "set net:timeout 30"
+            echo "set net:max-retries 2"
+            echo "pwd"
+            echo "ls"
+            echo "mirror --reverse --delete --verbose -X ^node_modules/ -X ^\\.env$ -X ^\\.git/ -X ^cloudflared$ -X ^data/accounts\\.json$ ./ ${REMOTE}"
+            echo "ls ${REMOTE}"
+            echo "bye"
+          } > "$LFTP_SCRIPT"
+
+          echo "lftp script:"
+          cat "$LFTP_SCRIPT"
+
+          lftp -u "$SFTP_USER,$SFTP_PASSWORD" -p "${SFTP_PORT:-22}" "sftp://$HOST" < "$LFTP_SCRIPT"
+          rm -f "$LFTP_SCRIPT"
 
           echo "Deploy finished."

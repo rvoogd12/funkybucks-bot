@@ -1,133 +1,109 @@
 import 'dotenv/config';
-import { InstallGlobalCommands, InstallGuildCommands } from './utils.js';
+import {
+  ApplicationIntegrationType,
+  InteractionContextType,
+  REST,
+  Routes,
+  SlashCommandBuilder,
+} from 'discord.js';
 
-const HI_COMMAND = {
-  name: 'hi',
-  description: 'Say Hi :D',
-  type: 1,
-  integration_types: [0, 1],
-  contexts: [0, 1, 2],
-};
+const commandBuilders = [
+  new SlashCommandBuilder()
+    .setName('hi')
+    .setDescription('Say Hi :D')
+    .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM, InteractionContextType.PrivateChannel)
+    .setIntegrationTypes(ApplicationIntegrationType.GuildInstall, ApplicationIntegrationType.UserInstall),
+  new SlashCommandBuilder()
+    .setName('help')
+    .setDescription('Show Funkybucks command help')
+    .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM, InteractionContextType.PrivateChannel)
+    .setIntegrationTypes(ApplicationIntegrationType.GuildInstall, ApplicationIntegrationType.UserInstall),
+  new SlashCommandBuilder()
+    .setName('bank')
+    .setDescription('Manage funkybucks accounts')
+    .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM, InteractionContextType.PrivateChannel)
+    .setIntegrationTypes(ApplicationIntegrationType.GuildInstall, ApplicationIntegrationType.UserInstall)
+    .addSubcommand((sub) =>
+      sub
+        .setName('balance')
+        .setDescription('Show a user account balance')
+        .addUserOption((option) =>
+          option.setName('user').setDescription('User to view').setRequired(false),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('add')
+        .setDescription('Add funkybucks to a user account')
+        .addUserOption((option) =>
+          option.setName('user').setDescription('User to credit').setRequired(true),
+        )
+        .addIntegerOption((option) =>
+          option.setName('amount').setDescription('Number of funkybucks to add').setRequired(true).setMinValue(1),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('leaderboard')
+        .setDescription('Show top funkybucks in the server')
+        .addIntegerOption((option) =>
+          option
+            .setName('limit')
+            .setDescription('How many top users to show')
+            .setRequired(false)
+            .setMinValue(1)
+            .setMaxValue(25),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('transfer')
+        .setDescription('Transfer funkybucks to another user')
+        .addUserOption((option) =>
+          option.setName('to').setDescription('Recipient of the transfer').setRequired(true),
+        )
+        .addIntegerOption((option) =>
+          option.setName('amount').setDescription('Amount of funkybucks to transfer').setRequired(true).setMinValue(1),
+        )
+        .addUserOption((option) =>
+          option.setName('from').setDescription('Source user for transfer (mods only)').setRequired(false),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('remove')
+        .setDescription('Remove funkybucks from a user account')
+        .addUserOption((option) =>
+          option.setName('user').setDescription('User to debit').setRequired(true),
+        )
+        .addIntegerOption((option) =>
+          option.setName('amount').setDescription('Number of funkybucks to remove').setRequired(true).setMinValue(1),
+        ),
+    ),
+];
 
-const HELP_COMMAND = {
-  name: 'help',
-  description: 'Show Funkybucks command help',
-  type: 1,
-  integration_types: [0, 1],
-  contexts: [0, 1, 2],
-};
+const commandData = commandBuilders.map((command) => command.toJSON());
 
-const BANK_COMMAND = {
-  name: 'bank',
-  description: 'Manage funkybucks accounts',
-  type: 1,
-  integration_types: [0, 1],
-  contexts: [0, 1, 2],
-  options: [
-    {
-      type: 1,
-      name: 'balance',
-      description: 'Show a user account balance',
-      options: [
-        {
-          type: 6,
-          name: 'user',
-          description: 'User to view',
-          required: false,
-        },
-      ],
-    },
-    {
-      type: 1,
-      name: 'add',
-      description: 'Add funkybucks to a user account',
-      options: [
-        {
-          type: 6,
-          name: 'user',
-          description: 'User to credit',
-          required: true,
-        },
-        {
-          type: 4,
-          name: 'amount',
-          description: 'Number of funkybucks to add',
-          required: true,
-          min_value: 1,
-        },
-      ],
-    },
-    {
-      type: 1,
-      name: 'leaderboard',
-      description: 'Show top funkybucks in the server',
-      options: [
-        {
-          type: 4,
-          name: 'limit',
-          description: 'How many top users to show',
-          required: false,
-          min_value: 1,
-          max_value: 25,
-        },
-      ],
-    },
-    {
-      type: 1,
-      name: 'transfer',
-      description: 'Transfer funkybucks to another user',
-      options: [
-        {
-          type: 6,
-          name: 'to',
-          description: 'Recipient of the transfer',
-          required: true,
-        },
-        {
-          type: 4,
-          name: 'amount',
-          description: 'Amount of funkybucks to transfer',
-          required: true,
-          min_value: 1,
-        },
-        {
-          type: 6,
-          name: 'from',
-          description: 'Source user for transfer (mods only)',
-          required: false,
-        },
-      ],
-    },
-    {
-      type: 1,
-      name: 'remove',
-      description: 'Remove funkybucks from a user account',
-      options: [
-        {
-          type: 6,
-          name: 'user',
-          description: 'User to debit',
-          required: true,
-        },
-        {
-          type: 4,
-          name: 'amount',
-          description: 'Number of funkybucks to remove',
-          required: true,
-          min_value: 1,
-        },
-      ],
-    },
-  ],
-};
+async function registerCommands() {
+  const token = process.env.DISCORD_TOKEN;
+  const appId = process.env.APP_ID;
+  if (!token || !appId) {
+    throw new Error('DISCORD_TOKEN and APP_ID are required to register commands.');
+  }
 
-const ALL_COMMANDS = [HI_COMMAND, HELP_COMMAND, BANK_COMMAND];
+  const rest = new REST().setToken(token);
 
-if (process.env.GUILD_ID) {
-  // Dev guild: register guild commands only, clear global commands
-  InstallGuildCommands(process.env.APP_ID, process.env.GUILD_ID, ALL_COMMANDS);
-  InstallGlobalCommands(process.env.APP_ID, []);
-} else {
-  // Production: register global commands only
-  InstallGlobalCommands(process.env.APP_ID, ALL_COMMANDS);
+  if (process.env.GUILD_ID) {
+    await rest.put(Routes.applicationGuildCommands(appId, process.env.GUILD_ID), { body: commandData });
+    await rest.put(Routes.applicationCommands(appId), { body: [] });
+    console.log(`Registered ${commandData.length} guild commands for guild ${process.env.GUILD_ID}.`);
+  } else {
+    await rest.put(Routes.applicationCommands(appId), { body: commandData });
+    console.log(`Registered ${commandData.length} global commands.`);
+  }
 }
+
+registerCommands().catch((err) => {
+  console.error('Command registration failed:', err);
+  process.exit(1);
+});

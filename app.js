@@ -1,263 +1,231 @@
 import 'dotenv/config';
-import express from 'express';
-import { randomBytes } from 'crypto';
 import {
-  InteractionResponseFlags,
-  InteractionResponseType,
-  InteractionType,
-  MessageComponentTypes,
-  verifyKeyMiddleware,
-} from 'discord-interactions';
+  AttachmentBuilder,
+  Client,
+  EmbedBuilder,
+  GatewayIntentBits,
+  PermissionFlagsBits,
+} from 'discord.js';
 import { getRandomEmoji, formatNumber } from './utils.js';
 import { addBalance, getBalance, removeBalance, getTopBalances, transferBalance } from './bank.js';
 import { generateLeaderboardImage } from './leaderboard.js';
-import { startCloudflareTunnel } from './tunnel.js';
 
-const requiredEnvVars = ['PUBLIC_KEY', 'DISCORD_TOKEN', 'APP_ID'];
-const missingEnvVars = requiredEnvVars.filter((key) => !process.env[key]);
-if (missingEnvVars.length > 0) {
-  console.error(`Missing required environment variables: ${missingEnvVars.join(', ')}`);
-  console.error('Set them in Orihost startup variables or create a .env file in /home/container/.');
+if (!process.env.DISCORD_TOKEN) {
+  console.error('Missing required environment variable: DISCORD_TOKEN');
+  console.error('Set it in Orihost startup variables or create a .env file in /home/container/.');
   process.exit(1);
 }
 
-// Create an express app
-const app = express();
-app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
-// Get port, or default to 3000
-const PORT = process.env.PORT || 3000;
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds],
+});
 
-function hasModeratorPermission(member) {
-  if (!member?.permissions) return false;
-  const permissions = typeof member.permissions === 'string' ? BigInt(member.permissions) : BigInt(member.permissions || 0);
-  const ADMINISTRATOR = 1n << 3n;
-  const MANAGE_GUILD = 1n << 5n;
-  return Boolean(permissions & (ADMINISTRATOR | MANAGE_GUILD));
+function hasModeratorPermission(interaction) {
+  const permissions = interaction.memberPermissions;
+  if (!permissions) return false;
+  return (
+    permissions.has(PermissionFlagsBits.Administrator)
+    || permissions.has(PermissionFlagsBits.ManageGuild)
+  );
 }
 
-function createResponse(content, ephemeral = false) {
-  return {
-    type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-    data: {
-      flags: ephemeral ? InteractionResponseFlags.EPHEMERAL : undefined,
-      content,
-    },
-  };
+function helpEmbed() {
+  return new EmbedBuilder()
+    .setTitle('Funkybucks Help')
+    .setDescription('A quick guide to your server economy commands.')
+    .setColor(0x00d4ff)
+    .addFields(
+      {
+        name: '/bank balance [user]',
+        value: 'Show a user account balance, or your own if no user is provided.',
+      },
+      {
+        name: '/bank transfer to <user> amount <number>',
+        value: 'Send funkybucks to another user.',
+      },
+      {
+        name: '/bank transfer from <user> to <user> amount <number>',
+        value: 'Moderators can move money between accounts.',
+      },
+      {
+        name: '/bank leaderboard [limit]',
+        value: 'Show the top funkybucks leaderboard in the server. Or all accounts if no limit is provided.',
+      },
+      {
+        name: '/bank add <user> amount <number>',
+        value: 'Mods only: credit funkybucks to a user.',
+      },
+      {
+        name: '/bank remove <user> amount <number>',
+        value: 'Mods only: debit funkybucks from a user.',
+      },
+    )
+    .setFooter({
+      text: 'Only authorized mods may add/remove funds. Transfers from others require moderation.',
+    });
 }
 
-function sendImageResponse(res, imageBuffer, fileName) {
-  const boundary = randomBytes(16).toString('hex');
-  const payload = JSON.stringify({
-    type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-    data: {
-      content: 'Funkybucks Leaderboard',
-      files: [
-        {
-          id: 0,
-          filename: fileName,
-        },
-      ],
-    },
-  });
+client.once('ready', () => {
+  console.log(`Logged in as ${client.user.tag}`);
+});
 
-  const body = Buffer.concat([
-    Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="payload_json"\r\nContent-Type: application/json\r\n\r\n`),
-    Buffer.from(payload),
-    Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="file0"; filename="${fileName}"\r\nContent-Type: image/png\r\n\r\n`),
-    imageBuffer,
-    Buffer.from(`\r\n--${boundary}--\r\n`),
-  ]);
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isChatInputCommand()) return;
 
-  res.setHeader('Content-Type', `multipart/form-data; boundary=${boundary}`);
-  res.setHeader('Content-Length', body.length);
-  res.send(body);
-}
-
-/**
- * Interactions endpoint URL where Discord will send HTTP requests
- * Parse request body and verifies incoming requests using discord-interactions package
- */
-app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async function (req, res) {
-  const { type, data, guild_id: guildId, member } = req.body;
-
-  if (type === InteractionType.PING) {
-    return res.send({ type: InteractionResponseType.PONG });
-  }
-
-  if (type === InteractionType.APPLICATION_COMMAND) {
-    const { name, options = [] } = data;
-
-    if (name === 'hi') {
-      return res.send(createResponse(`Hi! Time to make some funkybucks... ${getRandomEmoji()} \n-# Or spend some... >:3`));
-    }
-
-    if (name === 'help') {
-      return res.send({
-        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
-        data: {
-          embeds: [
-            {
-              title: 'Funkybucks Help',
-              description: 'A quick guide to your server economy commands.',
-              color: 0x00d4ff,
-              fields: [
-                {
-                  name: '/bank balance [user]',
-                  value: 'Show a user account balance, or your own if no user is provided.',
-                },
-                {
-                  name: '/bank transfer to <user> amount <number>',
-                  value: 'Send funkybucks to another user.',
-                },
-                {
-                  name: '/bank transfer from <user> to <user> amount <number>',
-                  value: 'Moderators can move money between accounts.',
-                },
-                {
-                  name: '/bank leaderboard [limit]',
-                  value: 'Show the top funkybucks leaderboard in the server. Or all accounts if no limit is provided.',
-                },
-                {
-                  name: '/bank add <user> amount <number>',
-                  value: 'Mods only: credit funkybucks to a user.',
-                },
-                {
-                  name: '/bank remove <user> amount <number>',
-                  value: 'Mods only: debit funkybucks from a user.',
-                },
-              ],
-              footer: {
-                text: 'Only authorized mods may add/remove funds. Transfers from others require moderation.',
-              },
-            },
-          ],
-        },
+  try {
+    if (interaction.commandName === 'hi') {
+      await interaction.reply({
+        content: `Hi! Time to make some funkybucks... ${getRandomEmoji()} \n-# Or spend some... >:3`,
       });
+      return;
     }
 
-    if (name === 'bank') {
-      const subcommand = options[0];
-      const subOptions = subcommand?.options || [];
-      const userOption = subOptions.find((option) => option.name === 'user');
-      const amountOption = subOptions.find((option) => option.name === 'amount');
-      const targetUserId = userOption?.value || member?.user?.id;
+    if (interaction.commandName === 'help') {
+      await interaction.reply({ embeds: [helpEmbed()] });
+      return;
+    }
 
+    if (interaction.commandName === 'bank') {
+      const guildId = interaction.guildId;
       if (!guildId) {
-        return res.send(createResponse('Bank accounts are only available inside a server.', true));
+        await interaction.reply({
+          content: 'Bank accounts are only available inside a server.',
+          ephemeral: true,
+        });
+        return;
       }
 
-      if (subcommand?.name === 'balance') {
-        if (!targetUserId) {
-          return res.send(createResponse('Could not determine the target user.', true));
-        }
+      const subcommand = interaction.options.getSubcommand();
 
-        const balance = await getBalance(guildId, targetUserId);
-        const mention = `<@${targetUserId}>`;
-        return res.send(createResponse(`${mention} has **${formatNumber(balance)}** funkybucks.`));
+      if (subcommand === 'balance') {
+        const user = interaction.options.getUser('user') ?? interaction.user;
+        const balance = await getBalance(guildId, user.id);
+        await interaction.reply({
+          content: `<@${user.id}> has **${formatNumber(balance)}** funkybucks.`,
+        });
+        return;
       }
 
-      if (subcommand?.name === 'add') {
-        if (!hasModeratorPermission(member)) {
-          return res.send(createResponse('You must be a moderator to add funkybucks.', true));
+      if (subcommand === 'add') {
+        if (!hasModeratorPermission(interaction)) {
+          await interaction.reply({
+            content: 'You must be a moderator to add funkybucks.',
+            ephemeral: true,
+          });
+          return;
         }
 
-        if (!targetUserId || !amountOption?.value) {
-          return res.send(createResponse('Please provide a user and amount.', true));
-        }
-
-        const amount = Number(amountOption.value);
-        if (!Number.isInteger(amount) || amount <= 0) {
-          return res.send(createResponse('Please provide a valid positive amount.', true));
-        }
-
-        const newBalance = await addBalance(guildId, targetUserId, amount);
-        return res.send(createResponse(`Added **${formatNumber(amount)}** funkybucks to <@${targetUserId}>. New balance: **${formatNumber(newBalance)}**.`));
+        const user = interaction.options.getUser('user', true);
+        const amount = interaction.options.getInteger('amount', true);
+        const newBalance = await addBalance(guildId, user.id, amount);
+        await interaction.reply({
+          content: `Added **${formatNumber(amount)}** funkybucks to <@${user.id}>. New balance: **${formatNumber(newBalance)}**.`,
+        });
+        return;
       }
 
-      if (subcommand?.name === 'leaderboard') {
-        const limitOption = subOptions.find((o) => o.name === 'limit');
-        const limit = Number(limitOption?.value) || 10;
+      if (subcommand === 'leaderboard') {
+        const limit = interaction.options.getInteger('limit') ?? 10;
         const top = await getTopBalances(guildId, limit);
         if (!top || top.length === 0) {
-          return res.send(createResponse('No accounts yet in this server.'));
+          await interaction.reply({ content: 'No accounts yet in this server.' });
+          return;
         }
+
+        await interaction.deferReply();
         try {
           const imageBuffer = await generateLeaderboardImage(top, guildId, process.env.DISCORD_TOKEN);
-          return sendImageResponse(res, imageBuffer, 'leaderboard.png');
+          const attachment = new AttachmentBuilder(imageBuffer, { name: 'leaderboard.png' });
+          await interaction.editReply({
+            content: 'Funkybucks Leaderboard',
+            files: [attachment],
+          });
         } catch (err) {
           console.error('Error generating leaderboard image:', err);
           const lines = top.map((entry, idx) => `${idx + 1}. <@${entry.userId}> — **${formatNumber(entry.balance)}**`);
-          return res.send(createResponse(`Top ${formatNumber(top.length)} funkybucks:\n${lines.join('\n')}`));
+          await interaction.editReply({
+            content: `Top ${formatNumber(top.length)} funkybucks:\n${lines.join('\n')}`,
+          });
         }
+        return;
       }
 
-      if (subcommand?.name === 'transfer') {
-        const toOption = subOptions.find((o) => o.name === 'to');
-        const fromOption = subOptions.find((o) => o.name === 'from');
-        const amountOption = subOptions.find((o) => o.name === 'amount');
-        const recipientId = toOption?.value;
-        const senderId = fromOption?.value || member?.user?.id;
+      if (subcommand === 'transfer') {
+        const recipient = interaction.options.getUser('to', true);
+        const amount = interaction.options.getInteger('amount', true);
+        const fromUser = interaction.options.getUser('from');
+        const senderId = fromUser?.id ?? interaction.user.id;
 
-        if (!recipientId || !amountOption?.value) {
-          return res.send(createResponse('Please provide a recipient and amount.', true));
+        if (senderId !== interaction.user.id && !hasModeratorPermission(interaction)) {
+          await interaction.reply({
+            content: 'You must be a moderator to transfer from another user.',
+            ephemeral: true,
+          });
+          return;
         }
 
-        if (senderId !== member?.user?.id && !hasModeratorPermission(member)) {
-          return res.send(createResponse('You must be a moderator to transfer from another user.', true));
-        }
-
-        if (recipientId === senderId) {
-          return res.send(createResponse('You cannot transfer funkybucks to the same account.', true));
-        }
-
-        const amount = Number(amountOption.value);
-        if (!Number.isInteger(amount) || amount <= 0) {
-          return res.send(createResponse('Please provide a valid positive amount.', true));
+        if (recipient.id === senderId) {
+          await interaction.reply({
+            content: 'You cannot transfer funkybucks to the same account.',
+            ephemeral: true,
+          });
+          return;
         }
 
         try {
-          const { fromBalance, toBalance } = await transferBalance(guildId, senderId, recipientId, amount);
-          return res.send(createResponse(`Transferred **${formatNumber(amount)}** funkybucks from <@${senderId}> to <@${recipientId}>.\n<@${senderId}> now has **${formatNumber(fromBalance)}**.\n<@${recipientId}> now has **${formatNumber(toBalance)}**.`));
+          const { fromBalance, toBalance } = await transferBalance(guildId, senderId, recipient.id, amount);
+          await interaction.reply({
+            content: `Transferred **${formatNumber(amount)}** funkybucks from <@${senderId}> to <@${recipient.id}>.\n<@${senderId}> now has **${formatNumber(fromBalance)}**.\n<@${recipient.id}> now has **${formatNumber(toBalance)}**.`,
+          });
         } catch (err) {
           if (err.message === 'insufficient_funds') {
-            return res.send(createResponse('The source account does not have enough funkybucks.', true));
+            await interaction.reply({
+              content: 'The source account does not have enough funkybucks.',
+              ephemeral: true,
+            });
+            return;
           }
           console.error('Transfer error:', err);
-          return res.send(createResponse('Could not complete the transfer.', true));
+          await interaction.reply({
+            content: 'Could not complete the transfer.',
+            ephemeral: true,
+          });
         }
+        return;
       }
 
-      if (subcommand?.name === 'remove') {
-        if (!hasModeratorPermission(member)) {
-          return res.send(createResponse('You must be a moderator to remove funkybucks.', true));
+      if (subcommand === 'remove') {
+        if (!hasModeratorPermission(interaction)) {
+          await interaction.reply({
+            content: 'You must be a moderator to remove funkybucks.',
+            ephemeral: true,
+          });
+          return;
         }
 
-        if (!targetUserId || !amountOption?.value) {
-          return res.send(createResponse('Please provide a user and amount.', true));
-        }
-
-        const amount = Number(amountOption.value);
-        if (!Number.isInteger(amount) || amount <= 0) {
-          return res.send(createResponse('Please provide a valid positive amount.', true));
-        }
-
-        const newBalance = await removeBalance(guildId, targetUserId, amount);
-        return res.send(createResponse(`Removed **${formatNumber(amount)}** funkybucks from <@${targetUserId}>. New balance: **${formatNumber(newBalance)}**.`));
+        const user = interaction.options.getUser('user', true);
+        const amount = interaction.options.getInteger('amount', true);
+        const newBalance = await removeBalance(guildId, user.id, amount);
+        await interaction.reply({
+          content: `Removed **${formatNumber(amount)}** funkybucks from <@${user.id}>. New balance: **${formatNumber(newBalance)}**.`,
+        });
+        return;
       }
 
-      return res.send(createResponse('Unknown bank subcommand.', true));
+      await interaction.reply({ content: 'Unknown bank subcommand.', ephemeral: true });
+      return;
     }
 
-    console.error(`unknown command: ${name}`);
-    return res.status(400).json({ error: 'unknown command' });
+    console.error(`unknown command: ${interaction.commandName}`);
+  } catch (err) {
+    console.error('Interaction error:', err);
+    const payload = { content: 'Something went wrong handling that command.', ephemeral: true };
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply(payload).catch(() => {});
+    } else {
+      await interaction.reply(payload).catch(() => {});
+    }
   }
-
-  console.error('unknown interaction type', type);
-  return res.status(400).json({ error: 'unknown interaction type' });
 });
 
-await startCloudflareTunnel(PORT);
-
-app.listen(PORT, () => {
-  console.log('Listening on port', PORT);
-});
+client.login(process.env.DISCORD_TOKEN);
