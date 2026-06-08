@@ -1,5 +1,48 @@
-import { createCanvas, Image } from 'canvas';
+import { createCanvas, Image, registerFont } from 'canvas';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { formatNumber } from './utils.js';
+
+const projectDir = path.dirname(fileURLToPath(import.meta.url));
+const FONT_FAMILY = 'Noto Sans';
+const MONEY_EMOJI_URL = 'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f4b0.png';
+
+let fontsRegistered = false;
+let moneyEmojiImage = null;
+
+function registerLeaderboardFonts() {
+  if (fontsRegistered) return;
+
+  const fontsDir = path.join(projectDir, 'assets', 'fonts');
+  const regular = path.join(fontsDir, 'NotoSans-Regular.ttf');
+  const bold = path.join(fontsDir, 'NotoSans-Bold.ttf');
+
+  if (!fs.existsSync(regular) || !fs.existsSync(bold)) {
+    console.warn('Leaderboard fonts missing from assets/fonts — falling back to system fonts.');
+    return;
+  }
+
+  registerFont(regular, { family: FONT_FAMILY, weight: 'normal', style: 'normal' });
+  registerFont(bold, { family: FONT_FAMILY, weight: 'bold', style: 'normal' });
+  fontsRegistered = true;
+}
+
+function font(size, weight = 'normal') {
+  return `${weight} ${size}px "${FONT_FAMILY}", sans-serif`;
+}
+
+async function loadMoneyEmoji() {
+  if (moneyEmojiImage) return moneyEmojiImage;
+
+  const res = await fetch(MONEY_EMOJI_URL);
+  if (!res.ok) throw new Error(`Failed to load money emoji image: HTTP ${res.status}`);
+
+  const image = new Image();
+  image.src = Buffer.from(await res.arrayBuffer());
+  moneyEmojiImage = image;
+  return image;
+}
 
 async function fetchUserData(userId, token) {
   try {
@@ -48,15 +91,31 @@ async function loadAvatarImage(user) {
   }
 }
 
+function drawBalance(ctx, balanceText, x, y, moneyEmoji) {
+  ctx.fillText(balanceText, x, y);
+  if (!moneyEmoji) return;
+
+  const textWidth = ctx.measureText(`${balanceText} `).width;
+  const emojiSize = 20;
+  ctx.drawImage(moneyEmoji, x + textWidth, y - emojiSize + 4, emojiSize, emojiSize);
+}
+
 export async function generateLeaderboardImage(topBalances, guildId, token) {
+  registerLeaderboardFonts();
+
   const guildName = await fetchGuildName(guildId, token) || 'Current Server';
-  // Fetch user data for all entries
   const userDataPromises = topBalances.map((entry) => fetchUserData(entry.userId, token));
   const usersData = await Promise.all(userDataPromises);
 
-  // Load avatars in parallel
   const avatarPromises = usersData.map((user) => (user ? loadAvatarImage(user) : Promise.resolve(null)));
   const avatars = await Promise.all(avatarPromises);
+
+  let moneyEmoji = null;
+  try {
+    moneyEmoji = await loadMoneyEmoji();
+  } catch (err) {
+    console.error('Failed to load money emoji for leaderboard:', err);
+  }
 
   const width = 900;
   const entryHeight = 80;
@@ -66,71 +125,61 @@ export async function generateLeaderboardImage(topBalances, guildId, token) {
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d');
 
-  // Background gradient
   const gradient = ctx.createLinearGradient(0, 0, 0, height);
   gradient.addColorStop(0, '#1a1a2e');
   gradient.addColorStop(1, '#0f3460');
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, width, height);
 
-  // Title
   ctx.fillStyle = '#00d4ff';
-  ctx.font = 'bold 40px Arial';
+  ctx.font = font(40, 'bold');
   ctx.textAlign = 'left';
   ctx.fillText('FUNKYBUCKS LEADERBOARD', 30, 60);
 
-  // Guild name
   ctx.fillStyle = '#a0a0a0';
-  ctx.font = '16px Arial';
+  ctx.font = font(16);
   ctx.fillText(guildName || 'Current Server', 30, 85);
 
-  // Draw rankings
   topBalances.forEach((entry, idx) => {
     const y = 120 + idx * entryHeight;
 
-    // Rank badge background
     const rankColors = ['#FFD700', '#C0C0C0', '#CD7F32', '#4169E1'];
     ctx.fillStyle = rankColors[idx] || '#4169E1';
     ctx.fillRect(20, y, 60, 60);
 
-    // Rank number
     ctx.fillStyle = '#000000';
-    ctx.font = 'bold 32px Arial';
+    ctx.font = font(32, 'bold');
     ctx.textAlign = 'center';
     ctx.fillText(`#${idx + 1}`, 50, y + 42);
 
-    // Draw avatar if available
     const avatar = avatars[idx];
     if (avatar) {
-    const cx = 130;             // fixed circle center x
-    const cy = y + 30;          // fixed circle center y
-    const radius = 27;          // change this to tweak circle
-    const size = radius * 2;    // drawImage size to fill circle
-    const dx = Math.round(cx - size / 2); // top-left x for drawImage
-    const dy = Math.round(cy - size / 2); // top-left y for drawImage
+      const cx = 130;
+      const cy = y + 30;
+      const radius = 27;
+      const size = radius * 2;
+      const dx = Math.round(cx - size / 2);
+      const dy = Math.round(cy - size / 2);
 
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-    ctx.clip();
-    ctx.drawImage(avatar, dx, dy, size, size);
-    ctx.restore();
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.drawImage(avatar, dx, dy, size, size);
+      ctx.restore();
     }
 
-    // User display name
     const userData = usersData[idx];
     const displayName = userData?.global_name || userData?.username || `User #${entry.userId.slice(-6)}`;
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 18px Arial';
+    ctx.font = font(18);
     ctx.textAlign = 'left';
     ctx.fillText(displayName, 170, y + 20);
 
-    // Balance
     ctx.fillStyle = '#00ff00';
-    ctx.font = 'bold 22px Arial';
-    ctx.fillText(`${formatNumber(entry.balance)} 💰`, 170, y + 48);
+    ctx.font = font(22);
+    drawBalance(ctx, formatNumber(entry.balance), 170, y + 48, moneyEmoji);
 
-    // Separator line
     ctx.strokeStyle = '#333333';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -139,7 +188,6 @@ export async function generateLeaderboardImage(topBalances, guildId, token) {
     ctx.stroke();
   });
 
-  // Add bottom padding
   ctx.fillStyle = 'rgba(0,0,0,0)';
   ctx.fillRect(0, height - padding, width, padding);
 
