@@ -56,15 +56,28 @@ jobs:
           echo "Deploying to $HOST:${SFTP_PORT:-22} -> $REMOTE"
           echo "Local app.js size: $(wc -c < app.js) bytes"
 
+          # Server-only paths to never touch (Orihost creates these via npm install).
+          EXCLUDES=(
+            -X ^node_modules/
+            -X ^\.npm/
+            -X ^\.npm-cache/
+            -X ^\.cache/
+            -X ^\.env$
+            -X ^\.git/
+            -X ^cloudflared$
+            -X ^data/accounts\.json$
+          )
+
           LFTP_SCRIPT=$(mktemp)
           {
             echo "set sftp:auto-confirm yes"
-            echo "set net:timeout 30"
-            echo "set net:max-retries 2"
+            echo "set net:timeout 60"
+            echo "set net:max-retries 3"
+            echo "set cmd:parallel 4"
             echo "pwd"
-            echo "ls"
-            echo "mirror --reverse --delete --verbose -X ^node_modules/ -X ^\\.env$ -X ^\\.git/ -X ^data/accounts\\.json$ ./ ${REMOTE}"
-            echo "ls ${REMOTE}"
+            # --only-newer: upload changed files only.
+            # No --delete: avoids hanging while removing remote node_modules/.npm trees.
+            echo "mirror --reverse --only-newer ${EXCLUDES[*]} ./ ${REMOTE}"
             echo "bye"
           } > "$LFTP_SCRIPT"
 
