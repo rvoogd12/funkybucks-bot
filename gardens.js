@@ -301,7 +301,7 @@ export async function setupGardens(guild) {
         }
         garden.channelId = null;
       }
-      await createGardenChannel(guild, member, guildData, { save: false, sendWelcome = true });
+      await createGardenChannel(guild, member, guildData, { save: false, sendWelcome: true });
       created++;
       if (created % 10 === 0) {
         await saveGardens(gardens);
@@ -332,7 +332,7 @@ export async function syncGardens(guild) {
     try {
       const garden = getGardenRecord(guildData, member.id);
       if (!garden.channelId) {
-        await createGardenChannel(guild, member, guildData, { save: false, sendWelcome = true });
+        await createGardenChannel(guild, member, guildData, { save: false, sendWelcome: true });
         created++;
         continue;
       }
@@ -342,7 +342,7 @@ export async function syncGardens(guild) {
 
       if (!channel) {
         garden.channelId = null;
-        await createGardenChannel(guild, member, guildData, { save: false, sendWelcome = true });
+        await createGardenChannel(guild, member, guildData, { save: false, sendWelcome: true });
         created++;
         continue;
       }
@@ -389,7 +389,7 @@ export async function handleMemberJoin(guild, member) {
     if (channel) return channel;
   }
 
-  const { channel } = await createGardenChannel(guild, member, guildData, { save: false, sendWelcome = true });
+  const { channel } = await createGardenChannel(guild, member, guildData, { save: false, sendWelcome: true });
   await saveGardens(gardens);
   return channel;
 }
