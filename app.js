@@ -9,6 +9,35 @@ import {
 import { getRandomEmoji, formatNumber } from './utils.js';
 import { addBalance, getBalance, removeBalance, getTopBalances, transferBalance } from './bank.js';
 import { generateLeaderboardImage } from './leaderboard.js';
+import {
+  setupGardens,
+  syncGardens,
+  setUserTimezone,
+  getGardenStatus,
+  updateGuildConfig,
+  getGardenLeaderboard,
+  markWeedPulled,
+  handleMemberJoin,
+  handleMemberLeave,
+  updateGardenChannelForMember,
+  processAllGardenTicks,
+  resolveTimezone,
+} from './gardens.js';
+import { startGardenScheduler } from './gardenScheduler.js';
+import {
+  timezoneSetMessage,
+  timezoneInvalidMessage,
+  noGardenMessage,
+  lockedGardenMessage,
+  formatStatusMessage,
+  setupCompleteMessage,
+  syncCompleteMessage,
+  leaderboardEmptyMessage,
+  leaderboardHeader,
+  leaderboardEntryLine,
+  configUpdatedMessage,
+  helpFooterMessage,
+} from './gardenFlavor.js';
 
 if (!process.env.DISCORD_TOKEN) {
   console.error('Missing required environment variable: DISCORD_TOKEN');
@@ -17,7 +46,11 @@ if (!process.env.DISCORD_TOKEN) {
 }
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildMembers,
+  ],
 });
 
 function hasModeratorPermission(interaction) {
@@ -32,7 +65,7 @@ function hasModeratorPermission(interaction) {
 function helpEmbed() {
   return new EmbedBuilder()
     .setTitle('Funkybucks Help')
-    .setDescription('A quick guide to your server economy commands.')
+    .setDescription('A quick guide to your server economy and garden commands.')
     .setColor(0x00d4ff)
     .addFields(
       {
@@ -59,14 +92,73 @@ function helpEmbed() {
         name: '/bank remove <user> amount <number>',
         value: 'Mods only: debit funkybucks from a user.',
       },
+      {
+        name: '/garden setup',
+        value: 'Mods only: create the Gardens category and a private channel for every member.',
+      },
+      {
+        name: '/garden sync',
+        value: 'Mods only: create missing gardens and fix permissions.',
+      },
+      {
+        name: '/garden timezone <eu|au|IANA>',
+        value: 'Set your local timezone for weed spawn (morning) and settlement (evening).',
+      },
+      {
+        name: '/garden status',
+        value: 'Weeds pulled today, streak, and payout info for your garden.',
+      },
+      {
+        name: '/garden leaderboard [limit]',
+        value: 'Top garden streaks and perfect days this month.',
+      },
+      {
+        name: '/garden config',
+        value: 'Mods only: tune spawn hour, settle hour, weed counts, and payout.',
+      },
     )
     .setFooter({
-      text: 'Only authorized mods may add/remove funds. Transfers from others require moderation.',
+      text: helpFooterMessage(),
     });
 }
 
 client.once('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
+  startGardenScheduler(client, processAllGardenTicks);
+});
+
+client.on('guildMemberAdd', async (member) => {
+  try {
+    await handleMemberJoin(member.guild, member);
+  } catch (err) {
+    console.error('guildMemberAdd garden error:', err);
+  }
+});
+
+client.on('guildMemberRemove', async (member) => {
+  try {
+    await handleMemberLeave(member.guild, member.id);
+  } catch (err) {
+    console.error('guildMemberRemove garden error:', err);
+  }
+});
+
+client.on('guildMemberUpdate', async (oldMember, newMember) => {
+  if (oldMember.displayName === newMember.displayName) return;
+  try {
+    await updateGardenChannelForMember(newMember.guild, newMember);
+  } catch (err) {
+    console.error('guildMemberUpdate garden rename error:', err);
+  }
+});
+
+client.on('messageDelete', async (message) => {
+  if (!message.guild || !message.channel) return;
+  try {
+    await markWeedPulled(message.guild.id, message.channel.id, message.id);
+  } catch (err) {
+    console.error('messageDelete garden error:', err);
+  }
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -82,6 +174,162 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.commandName === 'help') {
       await interaction.reply({ embeds: [helpEmbed()] });
+      return;
+    }
+
+    if (interaction.commandName === 'garden') {
+      const guildId = interaction.guildId;
+      if (!guildId) {
+        await interaction.reply({
+          content: 'Gardens are only available inside a server.',
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const subcommand = interaction.options.getSubcommand();
+
+      if (subcommand === 'setup') {
+        if (!hasModeratorPermission(interaction)) {
+          await interaction.reply({
+            content: 'You must be a moderator to set up gardens.',
+            ephemeral: true,
+          });
+          return;
+        }
+
+        await interaction.deferReply({ ephemeral: true });
+        const result = await setupGardens(interaction.guild);
+        const errorText = result.errors.length > 0
+          ? `\nErrors (${result.errors.length}):\n${result.errors.slice(0, 5).join('\n')}`
+          : '';
+        await interaction.editReply({
+          content: setupCompleteMessage(result, errorText),
+        });
+        return;
+      }
+
+      if (subcommand === 'sync') {
+        if (!hasModeratorPermission(interaction)) {
+          await interaction.reply({
+            content: 'You must be a moderator to sync gardens.',
+            ephemeral: true,
+          });
+          return;
+        }
+
+        await interaction.deferReply({ ephemeral: true });
+        const result = await syncGardens(interaction.guild);
+        const errorText = result.errors.length > 0
+          ? `\nErrors (${result.errors.length}):\n${result.errors.slice(0, 5).join('\n')}`
+          : '';
+        await interaction.editReply({
+          content: syncCompleteMessage(result, errorText),
+        });
+        return;
+      }
+
+      if (subcommand === 'timezone') {
+        const zoneInput = interaction.options.getString('zone', true);
+        try {
+          const tz = await setUserTimezone(guildId, interaction.user.id, zoneInput);
+          await interaction.reply({
+            content: timezoneSetMessage(tz),
+            ephemeral: true,
+          });
+        } catch (err) {
+          if (err.message === 'invalid_timezone') {
+            await interaction.reply({
+              content: timezoneInvalidMessage(),
+              ephemeral: true,
+            });
+            return;
+          }
+          throw err;
+        }
+        return;
+      }
+
+      if (subcommand === 'status') {
+        const status = await getGardenStatus(guildId, interaction.user.id);
+        if (!status?.hasGarden) {
+          await interaction.reply({
+            content: noGardenMessage(),
+            ephemeral: true,
+          });
+          return;
+        }
+
+        if (status.locked) {
+          await interaction.reply({
+            content: lockedGardenMessage(),
+            ephemeral: true,
+          });
+          return;
+        }
+
+        await interaction.reply({
+          content: formatStatusMessage(status),
+          ephemeral: true,
+        });
+        return;
+      }
+
+      if (subcommand === 'leaderboard') {
+        const limit = interaction.options.getInteger('limit') ?? 10;
+        const top = await getGardenLeaderboard(guildId, limit);
+        if (top.length === 0) {
+          await interaction.reply({ content: leaderboardEmptyMessage() });
+          return;
+        }
+
+        const lines = top.map((entry, idx) => leaderboardEntryLine(idx, entry));
+
+        await interaction.reply({
+          content: `${leaderboardHeader()}\n${lines.join('\n')}`,
+        });
+        return;
+      }
+
+      if (subcommand === 'config') {
+        if (!hasModeratorPermission(interaction)) {
+          await interaction.reply({
+            content: 'You must be a moderator to configure gardens.',
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const defaultTzInput = interaction.options.getString('default_timezone');
+        let defaultTimezone;
+        if (defaultTzInput) {
+          defaultTimezone = resolveTimezone(defaultTzInput);
+          if (!defaultTimezone) {
+            await interaction.reply({
+              content: timezoneInvalidMessage(),
+              ephemeral: true,
+            });
+            return;
+          }
+        }
+
+        const config = await updateGuildConfig(guildId, {
+          spawnHour: interaction.options.getInteger('spawn_hour'),
+          settleHour: interaction.options.getInteger('settle_hour'),
+          minWeeds: interaction.options.getInteger('min_weeds'),
+          maxWeeds: interaction.options.getInteger('max_weeds'),
+          basePayout: interaction.options.getInteger('base_payout'),
+          defaultTimezone,
+        });
+
+        await interaction.reply({
+          content: configUpdatedMessage(config),
+          ephemeral: true,
+        });
+        return;
+      }
+
+      await interaction.reply({ content: 'Unknown garden subcommand.', ephemeral: true });
       return;
     }
 

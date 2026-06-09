@@ -66,6 +66,7 @@ jobs:
             -X ^\.git/
             -X ^cloudflared$
             -X ^data/accounts\.json$
+            -X ^data/gardens\.json$
           )
 
           LFTP_SCRIPT=$(mktemp)

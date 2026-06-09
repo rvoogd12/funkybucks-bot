@@ -80,6 +80,73 @@ const commandBuilders = [
           option.setName('amount').setDescription('Number of funkybucks to remove').setRequired(true).setMinValue(1),
         ),
     ),
+  new SlashCommandBuilder()
+    .setName('garden')
+    .setDescription('Manage your garden and pull weeds for funkybucks')
+    .setContexts(InteractionContextType.Guild)
+    .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+    .addSubcommand((sub) =>
+      sub
+        .setName('setup')
+        .setDescription('Mods only: create the Gardens category and channels for all members'),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('sync')
+        .setDescription('Mods only: create missing gardens and fix permissions'),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('timezone')
+        .setDescription('Set your garden timezone (eu, au, or IANA name)')
+        .addStringOption((option) =>
+          option
+            .setName('zone')
+            .setDescription('eu, au, Europe/Amsterdam, Australia/Sydney, etc.')
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('status')
+        .setDescription('Show your garden weed progress and streak'),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('leaderboard')
+        .setDescription('Show top garden streaks and perfect days this month')
+        .addIntegerOption((option) =>
+          option
+            .setName('limit')
+            .setDescription('How many gardeners to show')
+            .setRequired(false)
+            .setMinValue(1)
+            .setMaxValue(25),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('config')
+        .setDescription('Mods only: configure garden spawn, payout, and weed counts')
+        .addIntegerOption((option) =>
+          option.setName('spawn_hour').setDescription('Local hour weeds spawn (0-23)').setMinValue(0).setMaxValue(23),
+        )
+        .addIntegerOption((option) =>
+          option.setName('settle_hour').setDescription('Local hour daily settlement (0-23)').setMinValue(0).setMaxValue(23),
+        )
+        .addIntegerOption((option) =>
+          option.setName('min_weeds').setDescription('Minimum weed messages per day').setMinValue(1).setMaxValue(50),
+        )
+        .addIntegerOption((option) =>
+          option.setName('max_weeds').setDescription('Maximum weed messages per day').setMinValue(1).setMaxValue(50),
+        )
+        .addIntegerOption((option) =>
+          option.setName('base_payout').setDescription('Funkybucks for clearing all weeds').setMinValue(1).setMaxValue(10000),
+        )
+        .addStringOption((option) =>
+          option.setName('default_timezone').setDescription('Default TZ for new gardens (eu, au, or IANA)'),
+        ),
+    ),
 ];
 
 const commandData = commandBuilders.map((command) => command.toJSON());
