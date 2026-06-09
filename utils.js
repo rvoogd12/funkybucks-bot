@@ -10,3 +10,8 @@ export function getRandomEmoji() {
 export function capitalize(str) {
   return str.charAt(0).toUpperCase() + str.slice(1);
 }
+
+export function truncateDiscordContent(content, maxLength = 2000) {
+  if (content.length <= maxLength) return content;
+  return `${content.slice(0, maxLength - 3)}...`;
+}

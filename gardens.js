@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { DateTime } from 'luxon';
 import {
   ChannelType,
+  OverwriteType,
   PermissionFlagsBits,
 } from 'discord.js';
 import { addBalance } from './bank.js';
@@ -93,8 +94,25 @@ export function slugifyDisplayName(displayName) {
   return slug || 'gardener';
 }
 
-export function channelNameFromDisplayName(displayName) {
-  return `${slugifyDisplayName(displayName)}-s-garden`;
+export function channelNameFromDisplayName(displayName, userId = null) {
+  const base = `${slugifyDisplayName(displayName)}-s-garden`;
+  if (!userId) return base.slice(0, 100);
+  return `${base}-${userId.slice(-6)}`.slice(0, 100);
+}
+
+async function assertBotGardenPermissions(guild) {
+  const me = guild.members.me ?? await guild.members.fetchMe();
+  const required = [
+    PermissionFlagsBits.ManageChannels,
+    PermissionFlagsBits.ViewChannel,
+    PermissionFlagsBits.SendMessages,
+    PermissionFlagsBits.ManageMessages,
+  ];
+  const missing = required.filter((perm) => !me.permissions.has(perm));
+  if (missing.length > 0) {
+    throw new Error('Bot is missing required permissions: Manage Channels, View Channels, Send Messages, and Manage Messages.');
+  }
+  return me;
 }
 
 export { gardenTopic } from './gardenFlavor.js';
@@ -154,6 +172,7 @@ function buildPermissionOverwrites(guild, ownerId, botMember) {
   const overwrites = [
     {
       id: guild.roles.everyone.id,
+      type: OverwriteType.Role,
       deny: [
         PermissionFlagsBits.ViewChannel,
         PermissionFlagsBits.SendMessages,
@@ -162,6 +181,7 @@ function buildPermissionOverwrites(guild, ownerId, botMember) {
     },
     {
       id: ownerId,
+      type: OverwriteType.Member,
       allow: [
         PermissionFlagsBits.ViewChannel,
         PermissionFlagsBits.ReadMessageHistory,
@@ -173,6 +193,7 @@ function buildPermissionOverwrites(guild, ownerId, botMember) {
   if (botMember) {
     overwrites.push({
       id: botMember.id,
+      type: OverwriteType.Member,
       allow: [
         PermissionFlagsBits.ViewChannel,
         PermissionFlagsBits.SendMessages,
@@ -202,7 +223,7 @@ async function ensureCategory(guild, guildData) {
   return category;
 }
 
-export async function createGardenChannel(guild, member, guildData, { save = true } = {}) {
+export async function createGardenChannel(guild, member, guildData, { save = true, sendWelcome = true } = {}) {
   const gardens = save ? await loadGardens() : { [guild.id]: guildData };
   const data = save ? ensureGuild(gardens, guild.id) : guildData;
   const garden = getGardenRecord(data, member.id);
@@ -225,7 +246,7 @@ export async function createGardenChannel(guild, member, guildData, { save = tru
   garden.topicVariant = topic.variant;
 
   const channel = await guild.channels.create({
-    name: channelNameFromDisplayName(displayName),
+    name: channelNameFromDisplayName(displayName, member.id),
     type: ChannelType.GuildText,
     parent: category.id,
     topic: topic.text,
@@ -239,7 +260,9 @@ export async function createGardenChannel(guild, member, guildData, { save = tru
     garden.timezone = config.defaultTimezone;
   }
 
-  await channel.send(welcomeGardenMessage());
+  if (sendWelcome) {
+    await channel.send(welcomeGardenMessage());
+  }
 
   if (save) {
     await saveGardens(gardens);
@@ -254,6 +277,8 @@ async function applyGardenPermissions(guild, channel, ownerId) {
 }
 
 export async function setupGardens(guild) {
+  await assertBotGardenPermissions(guild);
+
   const gardens = await loadGardens();
   const guildData = ensureGuild(gardens, guild.id);
   await ensureCategory(guild, guildData);
@@ -276,8 +301,11 @@ export async function setupGardens(guild) {
         }
         garden.channelId = null;
       }
-      await createGardenChannel(guild, member, guildData, { save: false });
+      await createGardenChannel(guild, member, guildData, { save: false, sendWelcome = true });
       created++;
+      if (created % 10 === 0) {
+        await saveGardens(gardens);
+      }
     } catch (err) {
       errors.push(`${member.displayName}: ${err.message}`);
     }
@@ -288,6 +316,8 @@ export async function setupGardens(guild) {
 }
 
 export async function syncGardens(guild) {
+  await assertBotGardenPermissions(guild);
+
   const gardens = await loadGardens();
   const guildData = ensureGuild(gardens, guild.id);
   await ensureCategory(guild, guildData);
@@ -302,7 +332,7 @@ export async function syncGardens(guild) {
     try {
       const garden = getGardenRecord(guildData, member.id);
       if (!garden.channelId) {
-        await createGardenChannel(guild, member, guildData, { save: false });
+        await createGardenChannel(guild, member, guildData, { save: false, sendWelcome = true });
         created++;
         continue;
       }
@@ -312,7 +342,7 @@ export async function syncGardens(guild) {
 
       if (!channel) {
         garden.channelId = null;
-        await createGardenChannel(guild, member, guildData, { save: false });
+        await createGardenChannel(guild, member, guildData, { save: false, sendWelcome = true });
         created++;
         continue;
       }
@@ -359,7 +389,7 @@ export async function handleMemberJoin(guild, member) {
     if (channel) return channel;
   }
 
-  const { channel } = await createGardenChannel(guild, member, guildData, { save: false });
+  const { channel } = await createGardenChannel(guild, member, guildData, { save: false, sendWelcome = true });
   await saveGardens(gardens);
   return channel;
 }
@@ -773,7 +803,7 @@ export async function updateGardenChannelForMember(guild, member) {
   if (!channel) return false;
 
   const config = guildData.config;
-  const newName = channelNameFromDisplayName(member.displayName);
+  const newName = channelNameFromDisplayName(member.displayName, member.id);
   const newTopic = gardenTopic(
     member.displayName,
     config.settleHour,

@@ -274,8 +274,10 @@ export function gardenTopic(displayName, settleHour, basePayout, variant = null)
   };
 }
 
-export function timezoneSetMessage(tz) {
-  return pickRandom(TIMEZONE_SET_LINES).replace('{tz}', tz);
+export function timezoneSetMessage(tz, userId = null) {
+  const line = pickRandom(TIMEZONE_SET_LINES).replace('{tz}', tz);
+  if (!userId) return line;
+  return `<@${userId}> — ${line}`;
 }
 
 export function timezoneInvalidMessage() {
@@ -290,9 +292,10 @@ export function lockedGardenMessage() {
   return pickRandom(LOCKED_GARDEN_LINES);
 }
 
-export function formatStatusMessage(status) {
+export function formatStatusMessage(status, userId = null) {
   const channelMention = status.channelId ? `<#${status.channelId}>` : 'unknown';
-  const header = `${pickRandom(STATUS_HEADERS)} **Your Garden** ${channelMention}`;
+  const gardenLabel = userId ? `<@${userId}>'s Garden` : 'Your Garden';
+  const header = `${pickRandom(STATUS_HEADERS)} **${gardenLabel}** ${channelMention}`;
 
   let progress;
   if (status.total > 0) {

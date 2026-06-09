@@ -6,7 +6,7 @@ import {
   GatewayIntentBits,
   PermissionFlagsBits,
 } from 'discord.js';
-import { getRandomEmoji, formatNumber } from './utils.js';
+import { getRandomEmoji, formatNumber, truncateDiscordContent } from './utils.js';
 import { addBalance, getBalance, removeBalance, getTopBalances, transferBalance } from './bank.js';
 import { generateLeaderboardImage } from './leaderboard.js';
 import {
@@ -62,59 +62,44 @@ function hasModeratorPermission(interaction) {
   );
 }
 
+function cmdLine(command, description) {
+  return `- \`${command}\` — ${description}`;
+}
+
 function helpEmbed() {
   return new EmbedBuilder()
     .setTitle('Funkybucks Help')
-    .setDescription('A quick guide to your server economy and garden commands.')
+    .setDescription('Server economy + daily garden minigame. Pull weeds in your private channel before evening settlement to earn funkybucks.')
     .setColor(0x00d4ff)
     .addFields(
       {
-        name: '/bank balance [user]',
-        value: 'Show a user account balance, or your own if no user is provided.',
+        name: 'Bank Commands',
+        value: [
+          cmdLine('/bank balance [user]', 'Show a balance — yours or someone else\'s.'),
+          cmdLine('/bank transfer to:<user> amount:<n>', 'Send funkybucks to another user.'),
+          cmdLine('/bank transfer from:<user> to:<user> amount:<n>', 'Mods: move money between accounts.'),
+          cmdLine('/bank leaderboard [limit]', 'Top funkybucks holders (default 10).'),
+          cmdLine('/bank add user:<user> amount:<n>', 'Mods: credit funkybucks.'),
+          cmdLine('/bank remove user:<user> amount:<n>', 'Mods: debit funkybucks.'),
+        ].join('\n'),
       },
       {
-        name: '/bank transfer to <user> amount <number>',
-        value: 'Send funkybucks to another user.',
+        name: 'Garden Commands',
+        value: [
+          cmdLine('/garden setup', 'Mods: create Gardens category + channel per member.'),
+          cmdLine('/garden sync', 'Mods: create missing gardens and fix permissions.'),
+          cmdLine('/garden timezone zone:<eu|au|IANA>', 'Set your local spawn/settle timezone.'),
+          cmdLine('/garden status', 'Weeds pulled today, streak, and payout info.'),
+          cmdLine('/garden leaderboard [limit]', 'Top streaks and perfect days this month.'),
+          cmdLine('/garden config', 'Mods: tune spawn hour, settle hour, weeds, and payout.'),
+        ].join('\n'),
       },
       {
-        name: '/bank transfer from <user> to <user> amount <number>',
-        value: 'Moderators can move money between accounts.',
-      },
-      {
-        name: '/bank leaderboard [limit]',
-        value: 'Show the top funkybucks leaderboard in the server. Or all accounts if no limit is provided.',
-      },
-      {
-        name: '/bank add <user> amount <number>',
-        value: 'Mods only: credit funkybucks to a user.',
-      },
-      {
-        name: '/bank remove <user> amount <number>',
-        value: 'Mods only: debit funkybucks from a user.',
-      },
-      {
-        name: '/garden setup',
-        value: 'Mods only: create the Gardens category and a private channel for every member.',
-      },
-      {
-        name: '/garden sync',
-        value: 'Mods only: create missing gardens and fix permissions.',
-      },
-      {
-        name: '/garden timezone <eu|au|IANA>',
-        value: 'Set your local timezone for weed spawn (morning) and settlement (evening).',
-      },
-      {
-        name: '/garden status',
-        value: 'Weeds pulled today, streak, and payout info for your garden.',
-      },
-      {
-        name: '/garden leaderboard [limit]',
-        value: 'Top garden streaks and perfect days this month.',
-      },
-      {
-        name: '/garden config',
-        value: 'Mods only: tune spawn hour, settle hour, weed counts, and payout.',
+        name: 'General',
+        value: [
+          cmdLine('/hi', 'Say hi.'),
+          cmdLine('/help', 'Show this help menu.'),
+        ].join('\n'),
       },
     )
     .setFooter({
@@ -198,13 +183,13 @@ client.on('interactionCreate', async (interaction) => {
           return;
         }
 
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ content: 'Setting up gardens…' });
         const result = await setupGardens(interaction.guild);
         const errorText = result.errors.length > 0
           ? `\nErrors (${result.errors.length}):\n${result.errors.slice(0, 5).join('\n')}`
           : '';
         await interaction.editReply({
-          content: setupCompleteMessage(result, errorText),
+          content: truncateDiscordContent(setupCompleteMessage(result, errorText)),
         });
         return;
       }
@@ -218,13 +203,13 @@ client.on('interactionCreate', async (interaction) => {
           return;
         }
 
-        await interaction.deferReply({ ephemeral: true });
+        await interaction.deferReply({ content: 'Syncing gardens…' });
         const result = await syncGardens(interaction.guild);
         const errorText = result.errors.length > 0
           ? `\nErrors (${result.errors.length}):\n${result.errors.slice(0, 5).join('\n')}`
           : '';
         await interaction.editReply({
-          content: syncCompleteMessage(result, errorText),
+          content: truncateDiscordContent(syncCompleteMessage(result, errorText)),
         });
         return;
       }
@@ -234,8 +219,7 @@ client.on('interactionCreate', async (interaction) => {
         try {
           const tz = await setUserTimezone(guildId, interaction.user.id, zoneInput);
           await interaction.reply({
-            content: timezoneSetMessage(tz),
-            ephemeral: true,
+            content: timezoneSetMessage(tz, interaction.user.id),
           });
         } catch (err) {
           if (err.message === 'invalid_timezone') {
@@ -269,8 +253,7 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         await interaction.reply({
-          content: formatStatusMessage(status),
-          ephemeral: true,
+          content: formatStatusMessage(status, interaction.user.id),
         });
         return;
       }
@@ -324,7 +307,6 @@ client.on('interactionCreate', async (interaction) => {
 
         await interaction.reply({
           content: configUpdatedMessage(config),
-          ephemeral: true,
         });
         return;
       }
@@ -466,8 +448,12 @@ client.on('interactionCreate', async (interaction) => {
 
     console.error(`unknown command: ${interaction.commandName}`);
   } catch (err) {
-    console.error('Interaction error:', err);
-    const payload = { content: 'Something went wrong handling that command.', ephemeral: true };
+    console.error(`Interaction error (${interaction.commandName}):`, err);
+    const detail = err?.message ? `\n\`${err.message}\`` : '';
+    const payload = {
+      content: `Something went wrong handling that command.${detail}`,
+      ephemeral: true,
+    };
     if (interaction.deferred || interaction.replied) {
       await interaction.editReply(payload).catch(() => {});
     } else {
