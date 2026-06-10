@@ -1,2 +1,6 @@
 node_modules
 .env
+
+# Bot persistence (balances, gardens, stats) — server-only, never commit
+data/*.json
+data/.garden-tick.lock

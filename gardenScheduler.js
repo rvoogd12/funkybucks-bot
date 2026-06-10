@@ -1,15 +1,25 @@
 const TICK_MS = 60 * 1000;
 let intervalId = null;
+let tickRunning = false;
 
 export function startGardenScheduler(client, processTick) {
   if (intervalId) {
     clearInterval(intervalId);
   }
 
-  const run = () => {
-    processTick(client).catch((err) => {
+  const run = async () => {
+    if (tickRunning) {
+      console.warn('Garden tick skipped — previous tick still running.');
+      return;
+    }
+    tickRunning = true;
+    try {
+      await processTick(client);
+    } catch (err) {
       console.error('Garden scheduler tick failed:', err);
-    });
+    } finally {
+      tickRunning = false;
+    }
   };
 
   run();

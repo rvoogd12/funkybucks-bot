@@ -49,10 +49,10 @@ const commandBuilders = [
         .addIntegerOption((option) =>
           option
             .setName('limit')
-            .setDescription('How many top users to show')
+            .setDescription('How many to show (omit for all server members)')
             .setRequired(false)
             .setMinValue(1)
-            .setMaxValue(25),
+            .setMaxValue(100),
         ),
     )
     .addSubcommand((sub) =>
@@ -102,7 +102,7 @@ const commandBuilders = [
         .addStringOption((option) =>
           option
             .setName('zone')
-            .setDescription('eu, au, Europe/Amsterdam, Australia/Sydney, etc.')
+            .setDescription('eu, au (Brisbane), Europe/Amsterdam, etc.')
             .setRequired(true),
         ),
     )
@@ -118,10 +118,10 @@ const commandBuilders = [
         .addIntegerOption((option) =>
           option
             .setName('limit')
-            .setDescription('How many gardeners to show')
+            .setDescription('How many to show (omit for all server members)')
             .setRequired(false)
             .setMinValue(1)
-            .setMaxValue(25),
+            .setMaxValue(100),
         ),
     )
     .addSubcommand((sub) =>
@@ -130,6 +130,9 @@ const commandBuilders = [
         .setDescription('Mods only: configure garden spawn, payout, and weed counts')
         .addIntegerOption((option) =>
           option.setName('spawn_hour').setDescription('Local hour weeds spawn (0-23)').setMinValue(0).setMaxValue(23),
+        )
+        .addIntegerOption((option) =>
+          option.setName('trickle_end_hour').setDescription('Local hour trickle weeds stop (0-23)').setMinValue(0).setMaxValue(23),
         )
         .addIntegerOption((option) =>
           option.setName('settle_hour').setDescription('Local hour daily settlement (0-23)').setMinValue(0).setMaxValue(23),
@@ -145,6 +148,32 @@ const commandBuilders = [
         )
         .addStringOption((option) =>
           option.setName('default_timezone').setDescription('Default TZ for new gardens (eu, au, or IANA)'),
+        ),
+    ),
+  new SlashCommandBuilder()
+    .setName('stats')
+    .setDescription('View garden and funkybucks stats for the server')
+    .setContexts(InteractionContextType.Guild)
+    .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+    .addSubcommand((sub) =>
+      sub
+        .setName('view')
+        .setDescription('Show garden and funkybucks stats for a user')
+        .addUserOption((option) =>
+          option.setName('user').setDescription('User to view (defaults to you)').setRequired(false),
+        ),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('leaderboard')
+        .setDescription('Rank members — pick topic, then period (peak FB, earned, perfect days, weeds)')
+        .addIntegerOption((option) =>
+          option
+            .setName('limit')
+            .setDescription('How many to show (omit for all members)')
+            .setRequired(false)
+            .setMinValue(1)
+            .setMaxValue(100),
         ),
     ),
 ];

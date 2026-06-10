@@ -13,55 +13,52 @@ import {
   drawRowDivider,
 } from './leaderboardCanvas.js';
 
-const MONEY_EMOJI = '1f4b0';
+const LEAF_EMOJI = '1f33f';
 
-async function loadMoneyEmoji() {
-  return loadTwemoji(MONEY_EMOJI);
-}
-
-function drawBalance(ctx, balanceText, x, y, moneyEmoji) {
-  ctx.fillText(balanceText, x, y);
-  if (!moneyEmoji) return;
-  const textWidth = ctx.measureText(`${balanceText} `).width;
-  const emojiSize = 20;
-  ctx.drawImage(moneyEmoji, x + textWidth, y - emojiSize + 4, emojiSize, emojiSize);
-}
-
-export async function generateLeaderboardImage(entries, guildId, token) {
+export async function generateGardenLeaderboardImage(entries, guildId, token) {
   registerLeaderboardFonts();
 
   const guildName = await fetchGuildName(guildId, token) || 'Current Server';
   const usersData = await Promise.all(entries.map((e) => fetchUserData(e.userId, token)));
   const avatars = await Promise.all(usersData.map((u) => (u ? loadAvatarImage(u) : null)));
 
-  let moneyEmoji = null;
+  let leafEmoji = null;
   try {
-    moneyEmoji = await loadMoneyEmoji();
+    leafEmoji = await loadTwemoji(LEAF_EMOJI);
   } catch (err) {
-    console.error('Failed to load money emoji for leaderboard:', err);
+    console.error('Failed to load leaf emoji for garden leaderboard:', err);
   }
 
   const { canvas, ctx, entryHeight, headerHeight, height, width } = createLeaderboardCanvas(900, entries.length);
 
   const gradient = ctx.createLinearGradient(0, 0, 0, height);
-  gradient.addColorStop(0, '#1a1a2e');
-  gradient.addColorStop(1, '#0f3460');
+  gradient.addColorStop(0, '#2d5a27');
+  gradient.addColorStop(0.5, '#3d6b34');
+  gradient.addColorStop(1, '#1a3d2e');
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, width, height);
 
-  ctx.fillStyle = '#00d4ff';
-  ctx.font = font(40, 'bold');
-  ctx.textAlign = 'left';
-  ctx.fillText('FUNKYBUCKS LEADERBOARD', 30, 60);
+  if (leafEmoji) {
+    ctx.globalAlpha = 0.08;
+    for (let i = 0; i < 6; i++) {
+      ctx.drawImage(leafEmoji, 60 + i * 140, 10, 48, 48);
+    }
+    ctx.globalAlpha = 1;
+  }
 
-  ctx.fillStyle = '#a0a0a0';
+  ctx.fillStyle = '#e8f5e0';
+  ctx.font = font(38, 'bold');
+  ctx.textAlign = 'left';
+  ctx.fillText('GARDEN LEADERBOARD', 30, 58);
+
+  ctx.fillStyle = '#b8d4a8';
   ctx.font = font(16);
-  await drawCanvasText(ctx, guildName, 30, 85, { fontSize: 16, fillStyle: '#a0a0a0', maxWidth: width - 60 });
+  await drawCanvasText(ctx, guildName, 30, 85, { fontSize: 16, fillStyle: '#b8d4a8', maxWidth: width - 60 });
 
   for (let idx = 0; idx < entries.length; idx += 1) {
     const entry = entries[idx];
     const y = headerHeight - 10 + idx * entryHeight;
-    drawRankBadge(ctx, entry.rank, y);
+    drawRankBadge(ctx, entry.rank, y, { garden: true });
 
     drawAvatar(ctx, avatars[idx], 130, y + 30);
 
@@ -69,13 +66,14 @@ export async function generateLeaderboardImage(entries, guildId, token) {
     const displayName = userData?.global_name || userData?.username || `User #${entry.userId.slice(-6)}`;
     await drawCanvasText(ctx, displayName, 170, y + 20, {
       fontSize: 18,
-      fillStyle: '#ffffff',
+      fillStyle: '#f5f0e1',
       maxWidth: width - 200,
     });
 
-    ctx.fillStyle = '#00ff00';
-    ctx.font = font(22);
-    drawBalance(ctx, formatNumber(entry.balance), 170, y + 48, moneyEmoji);
+    ctx.fillStyle = '#d4e8c2';
+    ctx.font = font(16);
+    const statLine = `${formatNumber(entry.perfectDaysThisMonth)} perfect days · ${formatNumber(entry.streak)}-day streak`;
+    ctx.fillText(statLine, 170, y + 48);
 
     drawRowDivider(ctx, y, width);
   }

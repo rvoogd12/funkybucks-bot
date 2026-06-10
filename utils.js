@@ -15,3 +15,8 @@ export function truncateDiscordContent(content, maxLength = 2000) {
   if (content.length <= maxLength) return content;
   return `${content.slice(0, maxLength - 3)}...`;
 }
+
+export function appendErrorEmote(message) {
+  const emote = Math.random() < 0.5 ? ':[' : ':c';
+  return `${message} ${emote}`;
+}

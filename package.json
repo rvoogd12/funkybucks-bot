@@ -11,7 +11,9 @@
   "scripts": {
     "start": "node app.js",
     "register": "node commands.js",
-    "dev": "nodemon app.js"
+    "dev": "nodemon app.js",
+    "postinstall": "node scripts/download-fonts.js",
+    "download-fonts": "node scripts/download-fonts.js"
   },
   "license": "MIT",
   "dependencies": {

@@ -2,13 +2,19 @@ import 'dotenv/config';
 import {
   AttachmentBuilder,
   Client,
-  EmbedBuilder,
   GatewayIntentBits,
   PermissionFlagsBits,
 } from 'discord.js';
-import { getRandomEmoji, formatNumber, truncateDiscordContent } from './utils.js';
-import { addBalance, getBalance, removeBalance, getTopBalances, transferBalance } from './bank.js';
+import { getRandomEmoji, formatNumber, truncateDiscordContent, appendErrorEmote } from './utils.js';
+import {
+  addBalance,
+  getBalance,
+  removeBalance,
+  getLeaderboardBalances,
+  transferBalance,
+} from './bank.js';
 import { generateLeaderboardImage } from './leaderboard.js';
+import { generateGardenLeaderboardImage } from './gardenLeaderboard.js';
 import {
   setupGardens,
   syncGardens,
@@ -16,6 +22,7 @@ import {
   getGardenStatus,
   updateGuildConfig,
   getGardenLeaderboard,
+  syncAllGardenTopics,
   markWeedPulled,
   handleMemberJoin,
   handleMemberLeave,
@@ -24,20 +31,38 @@ import {
   resolveTimezone,
 } from './gardens.js';
 import { startGardenScheduler } from './gardenScheduler.js';
+import { isBotUser, rejectIfBotUser, getBotUserId } from './botPolicy.js';
+import {
+  getUserStats,
+  getStatsLeaderboard,
+  buildStatsEmbed,
+  buildStatsLeaderboardContent,
+  recordTransfer,
+} from './stats.js';
 import {
   timezoneSetMessage,
   timezoneInvalidMessage,
   noGardenMessage,
   lockedGardenMessage,
-  formatStatusMessage,
+  buildStatusEmbed,
   setupCompleteMessage,
   syncCompleteMessage,
   leaderboardEmptyMessage,
-  leaderboardHeader,
   leaderboardEntryLine,
   configUpdatedMessage,
-  helpFooterMessage,
 } from './gardenFlavor.js';
+import {
+  HELP_SELECT_ID,
+  buildHelpIntroEmbed,
+  buildHelpSelectRow,
+  HELP_CATEGORIES,
+  buildStatsPeriodRow,
+  buildStatsTopicRow,
+  buildStatsLbPeriodRow,
+  STATS_PERIOD_SELECT_ID,
+  STATS_LB_TOPIC_SELECT_ID,
+  STATS_LB_PERIOD_SELECT_ID,
+} from './helpContent.js';
 
 if (!process.env.DISCORD_TOKEN) {
   console.error('Missing required environment variable: DISCORD_TOKEN');
@@ -53,6 +78,10 @@ const client = new Client({
   ],
 });
 
+function botId() {
+  return getBotUserId(client);
+}
+
 function hasModeratorPermission(interaction) {
   const permissions = interaction.memberPermissions;
   if (!permissions) return false;
@@ -62,49 +91,17 @@ function hasModeratorPermission(interaction) {
   );
 }
 
-function cmdLine(command, description) {
-  return `- \`${command}\` — ${description}`;
+async function replyError(interaction, message) {
+  const payload = { content: appendErrorEmote(message), ephemeral: true };
+  if (interaction.deferred || interaction.replied) {
+    await interaction.editReply(payload).catch(() => {});
+  } else {
+    await interaction.reply(payload).catch(() => {});
+  }
 }
 
-function helpEmbed() {
-  return new EmbedBuilder()
-    .setTitle('Funkybucks Help')
-    .setDescription('Server economy + daily garden minigame. Pull weeds in your private channel before evening settlement to earn funkybucks.')
-    .setColor(0x00d4ff)
-    .addFields(
-      {
-        name: 'Bank Commands',
-        value: [
-          cmdLine('/bank balance [user]', 'Show a balance — yours or someone else\'s.'),
-          cmdLine('/bank transfer to:<user> amount:<n>', 'Send funkybucks to another user.'),
-          cmdLine('/bank transfer from:<user> to:<user> amount:<n>', 'Mods: move money between accounts.'),
-          cmdLine('/bank leaderboard [limit]', 'Top funkybucks holders (default 10).'),
-          cmdLine('/bank add user:<user> amount:<n>', 'Mods: credit funkybucks.'),
-          cmdLine('/bank remove user:<user> amount:<n>', 'Mods: debit funkybucks.'),
-        ].join('\n'),
-      },
-      {
-        name: 'Garden Commands',
-        value: [
-          cmdLine('/garden setup', 'Mods: create Gardens category + channel per member.'),
-          cmdLine('/garden sync', 'Mods: create missing gardens and fix permissions.'),
-          cmdLine('/garden timezone zone:<eu|au|IANA>', 'Set your local spawn/settle timezone.'),
-          cmdLine('/garden status', 'Weeds pulled today, streak, and payout info.'),
-          cmdLine('/garden leaderboard [limit]', 'Top streaks and perfect days this month.'),
-          cmdLine('/garden config', 'Mods: tune spawn hour, settle hour, weeds, and payout.'),
-        ].join('\n'),
-      },
-      {
-        name: 'General',
-        value: [
-          cmdLine('/hi', 'Say hi.'),
-          cmdLine('/help', 'Show this help menu.'),
-        ].join('\n'),
-      },
-    )
-    .setFooter({
-      text: helpFooterMessage(),
-    });
+function botUserMessage() {
+  return 'Bots don\'t use funkybucks.';
 }
 
 client.once('ready', () => {
@@ -147,9 +144,65 @@ client.on('messageDelete', async (message) => {
 });
 
 client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-
   try {
+    if (interaction.isStringSelectMenu()) {
+      if (interaction.customId === HELP_SELECT_ID) {
+        const categoryId = interaction.values[0];
+        const category = HELP_CATEGORIES[categoryId];
+        if (!category) return;
+        await interaction.update({
+          embeds: [buildHelpIntroEmbed(), category.build()],
+          components: [buildHelpSelectRow(categoryId)],
+        });
+        return;
+      }
+
+      if (interaction.customId.startsWith(`${STATS_PERIOD_SELECT_ID}:`)) {
+        const targetUserId = interaction.customId.split(':')[1];
+        const period = interaction.values[0];
+        const guildId = interaction.guildId;
+        if (!guildId) return;
+        const stats = await getUserStats(guildId, targetUserId, period);
+        await interaction.update({
+          embeds: [buildStatsEmbed(targetUserId, stats, period)],
+          components: [buildStatsPeriodRow(period, `${STATS_PERIOD_SELECT_ID}:${targetUserId}`)],
+        });
+        return;
+      }
+
+      if (interaction.customId === STATS_LB_TOPIC_SELECT_ID || interaction.customId.startsWith(`${STATS_LB_TOPIC_SELECT_ID}:`)) {
+        const guildId = interaction.guildId;
+        if (!guildId) return;
+        const limitPart = interaction.customId.split(':')[1];
+        const limit = limitPart ? Number(limitPart) : null;
+        const topicKey = interaction.values[0];
+        const period = 'lifetime';
+        const top = await getStatsLeaderboard(interaction.guild, topicKey, period, limit, botId());
+        await interaction.update({
+          content: buildStatsLeaderboardContent(topicKey, period, top),
+          components: [buildStatsLbPeriodRow(topicKey, period, limit)],
+        });
+        return;
+      }
+
+      if (interaction.customId.startsWith(`${STATS_LB_PERIOD_SELECT_ID}:`)) {
+        const guildId = interaction.guildId;
+        if (!guildId) return;
+        const parts = interaction.customId.split(':');
+        const topicKey = parts[1];
+        const limit = parts[2] ? Number(parts[2]) : null;
+        const period = interaction.values[0];
+        const top = await getStatsLeaderboard(interaction.guild, topicKey, period, limit, botId());
+        await interaction.update({
+          content: buildStatsLeaderboardContent(topicKey, period, top),
+          components: [buildStatsLbPeriodRow(topicKey, period, limit)],
+        });
+        return;
+      }
+    }
+
+    if (!interaction.isChatInputCommand()) return;
+
     if (interaction.commandName === 'hi') {
       await interaction.reply({
         content: `Hi! Time to make some funkybucks... ${getRandomEmoji()} \n-# Or spend some... >:3`,
@@ -158,17 +211,52 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (interaction.commandName === 'help') {
-      await interaction.reply({ embeds: [helpEmbed()] });
+      await interaction.reply({
+        embeds: [buildHelpIntroEmbed(), HELP_CATEGORIES.commands.build()],
+        components: [buildHelpSelectRow('commands')],
+      });
       return;
+    }
+
+    if (interaction.commandName === 'stats') {
+      const guildId = interaction.guildId;
+      if (!guildId) {
+        await replyError(interaction, 'Stats are only available inside a server.');
+        return;
+      }
+
+      const subcommand = interaction.options.getSubcommand();
+
+      if (subcommand === 'view') {
+        const user = interaction.options.getUser('user') ?? interaction.user;
+        if (isBotUser(user, client)) {
+          await replyError(interaction, botUserMessage());
+          return;
+        }
+
+        const period = 'lifetime';
+        const stats = await getUserStats(guildId, user.id, period);
+        await interaction.reply({
+          embeds: [buildStatsEmbed(user.id, stats, period)],
+          components: [buildStatsPeriodRow(period, `${STATS_PERIOD_SELECT_ID}:${user.id}`)],
+        });
+        return;
+      }
+
+      if (subcommand === 'leaderboard') {
+        const limit = interaction.options.getInteger('limit');
+        await interaction.reply({
+          content: 'Choose a leaderboard topic:',
+          components: [buildStatsTopicRow('peak', limit)],
+        });
+        return;
+      }
     }
 
     if (interaction.commandName === 'garden') {
       const guildId = interaction.guildId;
       if (!guildId) {
-        await interaction.reply({
-          content: 'Gardens are only available inside a server.',
-          ephemeral: true,
-        });
+        await replyError(interaction, 'Gardens are only available inside a server.');
         return;
       }
 
@@ -176,14 +264,11 @@ client.on('interactionCreate', async (interaction) => {
 
       if (subcommand === 'setup') {
         if (!hasModeratorPermission(interaction)) {
-          await interaction.reply({
-            content: 'You must be a moderator to set up gardens.',
-            ephemeral: true,
-          });
+          await replyError(interaction, 'You must be a moderator to set up gardens.');
           return;
         }
 
-        await interaction.deferReply({ content: 'Setting up gardens…' });
+        await interaction.deferReply();
         const result = await setupGardens(interaction.guild);
         const errorText = result.errors.length > 0
           ? `\nErrors (${result.errors.length}):\n${result.errors.slice(0, 5).join('\n')}`
@@ -196,15 +281,13 @@ client.on('interactionCreate', async (interaction) => {
 
       if (subcommand === 'sync') {
         if (!hasModeratorPermission(interaction)) {
-          await interaction.reply({
-            content: 'You must be a moderator to sync gardens.',
-            ephemeral: true,
-          });
+          await replyError(interaction, 'You must be a moderator to sync gardens.');
           return;
         }
 
-        await interaction.deferReply({ content: 'Syncing gardens…' });
+        await interaction.deferReply();
         const result = await syncGardens(interaction.guild);
+        await syncAllGardenTopics(interaction.guild);
         const errorText = result.errors.length > 0
           ? `\nErrors (${result.errors.length}):\n${result.errors.slice(0, 5).join('\n')}`
           : '';
@@ -223,10 +306,7 @@ client.on('interactionCreate', async (interaction) => {
           });
         } catch (err) {
           if (err.message === 'invalid_timezone') {
-            await interaction.reply({
-              content: timezoneInvalidMessage(),
-              ephemeral: true,
-            });
+            await replyError(interaction, timezoneInvalidMessage());
             return;
           }
           throw err;
@@ -237,49 +317,51 @@ client.on('interactionCreate', async (interaction) => {
       if (subcommand === 'status') {
         const status = await getGardenStatus(guildId, interaction.user.id);
         if (!status?.hasGarden) {
-          await interaction.reply({
-            content: noGardenMessage(),
-            ephemeral: true,
-          });
+          await replyError(interaction, noGardenMessage());
           return;
         }
 
         if (status.locked) {
-          await interaction.reply({
-            content: lockedGardenMessage(),
-            ephemeral: true,
-          });
+          await replyError(interaction, lockedGardenMessage());
           return;
         }
 
         await interaction.reply({
-          content: formatStatusMessage(status, interaction.user.id),
+          embeds: [buildStatusEmbed(status, interaction.user.id)],
         });
         return;
       }
 
       if (subcommand === 'leaderboard') {
-        const limit = interaction.options.getInteger('limit') ?? 10;
-        const top = await getGardenLeaderboard(guildId, limit);
+        const limit = interaction.options.getInteger('limit');
+        const top = await getGardenLeaderboard(interaction.guild, { limit, excludeBotId: botId() });
+
         if (top.length === 0) {
           await interaction.reply({ content: leaderboardEmptyMessage() });
           return;
         }
 
-        const lines = top.map((entry, idx) => leaderboardEntryLine(idx, entry));
-
-        await interaction.reply({
-          content: `${leaderboardHeader()}\n${lines.join('\n')}`,
-        });
+        await interaction.deferReply();
+        try {
+          const imageBuffer = await generateGardenLeaderboardImage(top, guildId, process.env.DISCORD_TOKEN);
+          const attachment = new AttachmentBuilder(imageBuffer, { name: 'garden-leaderboard.png' });
+          await interaction.editReply({
+            content: 'Garden Leaderboard',
+            files: [attachment],
+          });
+        } catch (err) {
+          console.error('Error generating garden leaderboard image:', err);
+          const lines = top.map((entry) => leaderboardEntryLine(entry));
+          await interaction.editReply({
+            content: `**Garden Leaderboard**\n${lines.join('\n')}`,
+          });
+        }
         return;
       }
 
       if (subcommand === 'config') {
         if (!hasModeratorPermission(interaction)) {
-          await interaction.reply({
-            content: 'You must be a moderator to configure gardens.',
-            ephemeral: true,
-          });
+          await replyError(interaction, 'You must be a moderator to configure gardens.');
           return;
         }
 
@@ -288,16 +370,14 @@ client.on('interactionCreate', async (interaction) => {
         if (defaultTzInput) {
           defaultTimezone = resolveTimezone(defaultTzInput);
           if (!defaultTimezone) {
-            await interaction.reply({
-              content: timezoneInvalidMessage(),
-              ephemeral: true,
-            });
+            await replyError(interaction, timezoneInvalidMessage());
             return;
           }
         }
 
         const config = await updateGuildConfig(guildId, {
           spawnHour: interaction.options.getInteger('spawn_hour'),
+          trickleEndHour: interaction.options.getInteger('trickle_end_hour'),
           settleHour: interaction.options.getInteger('settle_hour'),
           minWeeds: interaction.options.getInteger('min_weeds'),
           maxWeeds: interaction.options.getInteger('max_weeds'),
@@ -305,23 +385,22 @@ client.on('interactionCreate', async (interaction) => {
           defaultTimezone,
         });
 
+        await syncAllGardenTopics(interaction.guild);
+
         await interaction.reply({
           content: configUpdatedMessage(config),
         });
         return;
       }
 
-      await interaction.reply({ content: 'Unknown garden subcommand.', ephemeral: true });
+      await replyError(interaction, 'Unknown garden subcommand.');
       return;
     }
 
     if (interaction.commandName === 'bank') {
       const guildId = interaction.guildId;
       if (!guildId) {
-        await interaction.reply({
-          content: 'Bank accounts are only available inside a server.',
-          ephemeral: true,
-        });
+        await replyError(interaction, 'Bank accounts are only available inside a server.');
         return;
       }
 
@@ -329,7 +408,12 @@ client.on('interactionCreate', async (interaction) => {
 
       if (subcommand === 'balance') {
         const user = interaction.options.getUser('user') ?? interaction.user;
-        const balance = await getBalance(guildId, user.id);
+        if (isBotUser(user, client)) {
+          await replyError(interaction, botUserMessage());
+          return;
+        }
+
+        const balance = await getBalance(guildId, user.id, botId());
         await interaction.reply({
           content: `<@${user.id}> has **${formatNumber(balance)}** funkybucks.`,
         });
@@ -338,16 +422,20 @@ client.on('interactionCreate', async (interaction) => {
 
       if (subcommand === 'add') {
         if (!hasModeratorPermission(interaction)) {
-          await interaction.reply({
-            content: 'You must be a moderator to add funkybucks.',
-            ephemeral: true,
-          });
+          await replyError(interaction, 'You must be a moderator to add funkybucks.');
           return;
         }
 
         const user = interaction.options.getUser('user', true);
+        try {
+          rejectIfBotUser(user, client);
+        } catch {
+          await replyError(interaction, botUserMessage());
+          return;
+        }
+
         const amount = interaction.options.getInteger('amount', true);
-        const newBalance = await addBalance(guildId, user.id, amount);
+        const newBalance = await addBalance(guildId, user.id, amount, botId());
         await interaction.reply({
           content: `Added **${formatNumber(amount)}** funkybucks to <@${user.id}>. New balance: **${formatNumber(newBalance)}**.`,
         });
@@ -355,10 +443,11 @@ client.on('interactionCreate', async (interaction) => {
       }
 
       if (subcommand === 'leaderboard') {
-        const limit = interaction.options.getInteger('limit') ?? 10;
-        const top = await getTopBalances(guildId, limit);
+        const limit = interaction.options.getInteger('limit');
+        const top = await getLeaderboardBalances(interaction.guild, { limit, excludeBotId: botId() });
+
         if (!top || top.length === 0) {
-          await interaction.reply({ content: 'No accounts yet in this server.' });
+          await interaction.reply({ content: 'No members found in this server.' });
           return;
         }
 
@@ -372,9 +461,9 @@ client.on('interactionCreate', async (interaction) => {
           });
         } catch (err) {
           console.error('Error generating leaderboard image:', err);
-          const lines = top.map((entry, idx) => `${idx + 1}. <@${entry.userId}> — **${formatNumber(entry.balance)}**`);
+          const lines = top.map((entry) => `#${entry.rank} <@${entry.userId}> — **${formatNumber(entry.balance)}**`);
           await interaction.editReply({
-            content: `Top ${formatNumber(top.length)} funkybucks:\n${lines.join('\n')}`,
+            content: `**Funkybucks Leaderboard**\n${lines.join('\n')}`,
           });
         }
         return;
@@ -386,79 +475,75 @@ client.on('interactionCreate', async (interaction) => {
         const fromUser = interaction.options.getUser('from');
         const senderId = fromUser?.id ?? interaction.user.id;
 
+        if (isBotUser(recipient, client) || (fromUser && isBotUser(fromUser, client))) {
+          await replyError(interaction, botUserMessage());
+          return;
+        }
+
         if (senderId !== interaction.user.id && !hasModeratorPermission(interaction)) {
-          await interaction.reply({
-            content: 'You must be a moderator to transfer from another user.',
-            ephemeral: true,
-          });
+          await replyError(interaction, 'You must be a moderator to transfer from another user.');
           return;
         }
 
         if (recipient.id === senderId) {
-          await interaction.reply({
-            content: 'You cannot transfer funkybucks to the same account.',
-            ephemeral: true,
-          });
+          await replyError(interaction, 'You cannot transfer funkybucks to the same account.');
           return;
         }
 
         try {
-          const { fromBalance, toBalance } = await transferBalance(guildId, senderId, recipient.id, amount);
+          const { fromBalance, toBalance } = await transferBalance(
+            guildId, senderId, recipient.id, amount, botId(),
+          );
+          await recordTransfer(guildId, senderId, recipient.id, amount);
           await interaction.reply({
             content: `Transferred **${formatNumber(amount)}** funkybucks from <@${senderId}> to <@${recipient.id}>.\n<@${senderId}> now has **${formatNumber(fromBalance)}**.\n<@${recipient.id}> now has **${formatNumber(toBalance)}**.`,
           });
         } catch (err) {
           if (err.message === 'insufficient_funds') {
-            await interaction.reply({
-              content: 'The source account does not have enough funkybucks.',
-              ephemeral: true,
-            });
+            await replyError(interaction, 'The source account does not have enough funkybucks.');
+            return;
+          }
+          if (err.message === 'bot_user') {
+            await replyError(interaction, botUserMessage());
             return;
           }
           console.error('Transfer error:', err);
-          await interaction.reply({
-            content: 'Could not complete the transfer.',
-            ephemeral: true,
-          });
+          await replyError(interaction, 'Could not complete the transfer.');
         }
         return;
       }
 
       if (subcommand === 'remove') {
         if (!hasModeratorPermission(interaction)) {
-          await interaction.reply({
-            content: 'You must be a moderator to remove funkybucks.',
-            ephemeral: true,
-          });
+          await replyError(interaction, 'You must be a moderator to remove funkybucks.');
           return;
         }
 
         const user = interaction.options.getUser('user', true);
+        try {
+          rejectIfBotUser(user, client);
+        } catch {
+          await replyError(interaction, botUserMessage());
+          return;
+        }
+
         const amount = interaction.options.getInteger('amount', true);
-        const newBalance = await removeBalance(guildId, user.id, amount);
+        const newBalance = await removeBalance(guildId, user.id, amount, botId());
         await interaction.reply({
           content: `Removed **${formatNumber(amount)}** funkybucks from <@${user.id}>. New balance: **${formatNumber(newBalance)}**.`,
         });
         return;
       }
 
-      await interaction.reply({ content: 'Unknown bank subcommand.', ephemeral: true });
+      await replyError(interaction, 'Unknown bank subcommand.');
       return;
     }
 
     console.error(`unknown command: ${interaction.commandName}`);
   } catch (err) {
     console.error(`Interaction error (${interaction.commandName}):`, err);
-    const detail = err?.message ? `\n\`${err.message}\`` : '';
-    const payload = {
-      content: `Something went wrong handling that command.${detail}`,
-      ephemeral: true,
-    };
-    if (interaction.deferred || interaction.replied) {
-      await interaction.editReply(payload).catch(() => {});
-    } else {
-      await interaction.reply(payload).catch(() => {});
-    }
+    const detail = err?.message ? ` ${err.message}` : '';
+    await replyError(interaction, `Something went wrong handling that command.${detail}`);
   }
 });
 
