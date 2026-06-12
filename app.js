@@ -2,7 +2,9 @@ import 'dotenv/config';
 import {
   AttachmentBuilder,
   Client,
+  Events,
   GatewayIntentBits,
+  MessageFlags,
   PermissionFlagsBits,
 } from 'discord.js';
 import { getRandomEmoji, formatNumber, truncateDiscordContent, appendErrorEmote } from './utils.js';
@@ -15,6 +17,7 @@ import {
 } from './bank.js';
 import { generateLeaderboardImage } from './leaderboard.js';
 import { generateGardenLeaderboardImage } from './gardenLeaderboard.js';
+import { generateStatsLeaderboardImage } from './statsLeaderboard.js';
 import {
   setupGardens,
   syncGardens,
@@ -38,7 +41,9 @@ import {
   buildStatsEmbed,
   buildStatsLeaderboardContent,
   recordTransfer,
+  STATS_LEADERBOARD_TOPICS,
 } from './stats.js';
+import { warmGuildMemberCaches, getDisplayName } from './guildMembers.js';
 import {
   timezoneSetMessage,
   timezoneInvalidMessage,
@@ -91,8 +96,12 @@ function hasModeratorPermission(interaction) {
   );
 }
 
+function interactionLabel(interaction) {
+  return interaction.commandName ?? interaction.customId ?? 'unknown';
+}
+
 async function replyError(interaction, message) {
-  const payload = { content: appendErrorEmote(message), ephemeral: true };
+  const payload = { content: appendErrorEmote(message), flags: MessageFlags.Ephemeral };
   if (interaction.deferred || interaction.replied) {
     await interaction.editReply(payload).catch(() => {});
   } else {
@@ -101,12 +110,42 @@ async function replyError(interaction, message) {
 }
 
 function botUserMessage() {
-  return 'Bots don\'t use funkybucks.';
+  return `Bots don't use funkybucks. ${Math.random() < 0.5 ? ':[' : ':c'}`;
 }
 
-client.once('ready', () => {
-  console.log(`Logged in as ${client.user.tag}`);
-  startGardenScheduler(client, processAllGardenTicks);
+async function replyStatsLeaderboardImage(interaction, topicKey, period, limit) {
+  await interaction.deferUpdate();
+  const guildId = interaction.guildId;
+  const top = await getStatsLeaderboard(interaction.guild, topicKey, period, limit, botId());
+  const topic = STATS_LEADERBOARD_TOPICS[topicKey];
+  const title = topic?.label ?? 'Stats';
+
+  try {
+    const imageBuffer = await generateStatsLeaderboardImage(
+      top, topicKey, period, guildId, process.env.DISCORD_TOKEN,
+    );
+    const attachment = new AttachmentBuilder(imageBuffer, { name: 'stats-leaderboard.png' });
+    await interaction.editReply({
+      content: `**${title}** — Stats Leaderboard`,
+      embeds: [],
+      files: [attachment],
+      components: [buildStatsLbPeriodRow(topicKey, period, limit)],
+    });
+  } catch (err) {
+    console.error('Error generating stats leaderboard image:', err);
+    await interaction.editReply({
+      content: buildStatsLeaderboardContent(topicKey, period, top),
+      embeds: [],
+      files: [],
+      components: [buildStatsLbPeriodRow(topicKey, period, limit)],
+    });
+  }
+}
+
+client.once(Events.ClientReady, async (readyClient) => {
+  console.log(`Logged in as ${readyClient.user.tag}`);
+  await warmGuildMemberCaches(readyClient);
+  startGardenScheduler(readyClient, processAllGardenTicks);
 });
 
 client.on('guildMemberAdd', async (member) => {
@@ -162,9 +201,11 @@ client.on('interactionCreate', async (interaction) => {
         const period = interaction.values[0];
         const guildId = interaction.guildId;
         if (!guildId) return;
+        await interaction.deferUpdate();
         const stats = await getUserStats(guildId, targetUserId, period);
-        await interaction.update({
-          embeds: [buildStatsEmbed(targetUserId, stats, period)],
+        const displayName = await getDisplayName(interaction.guild, targetUserId);
+        await interaction.editReply({
+          embeds: [buildStatsEmbed(displayName, stats, period)],
           components: [buildStatsPeriodRow(period, `${STATS_PERIOD_SELECT_ID}:${targetUserId}`)],
         });
         return;
@@ -176,12 +217,7 @@ client.on('interactionCreate', async (interaction) => {
         const limitPart = interaction.customId.split(':')[1];
         const limit = limitPart ? Number(limitPart) : null;
         const topicKey = interaction.values[0];
-        const period = 'lifetime';
-        const top = await getStatsLeaderboard(interaction.guild, topicKey, period, limit, botId());
-        await interaction.update({
-          content: buildStatsLeaderboardContent(topicKey, period, top),
-          components: [buildStatsLbPeriodRow(topicKey, period, limit)],
-        });
+        await replyStatsLeaderboardImage(interaction, topicKey, 'lifetime', limit);
         return;
       }
 
@@ -192,11 +228,7 @@ client.on('interactionCreate', async (interaction) => {
         const topicKey = parts[1];
         const limit = parts[2] ? Number(parts[2]) : null;
         const period = interaction.values[0];
-        const top = await getStatsLeaderboard(interaction.guild, topicKey, period, limit, botId());
-        await interaction.update({
-          content: buildStatsLeaderboardContent(topicKey, period, top),
-          components: [buildStatsLbPeriodRow(topicKey, period, limit)],
-        });
+        await replyStatsLeaderboardImage(interaction, topicKey, period, limit);
         return;
       }
     }
@@ -236,8 +268,11 @@ client.on('interactionCreate', async (interaction) => {
 
         const period = 'lifetime';
         const stats = await getUserStats(guildId, user.id, period);
+        const displayName = user.id === interaction.user.id
+          ? interaction.member.displayName
+          : await getDisplayName(interaction.guild, user.id);
         await interaction.reply({
-          embeds: [buildStatsEmbed(user.id, stats, period)],
+          embeds: [buildStatsEmbed(displayName, stats, period)],
           components: [buildStatsPeriodRow(period, `${STATS_PERIOD_SELECT_ID}:${user.id}`)],
         });
         return;
@@ -287,7 +322,6 @@ client.on('interactionCreate', async (interaction) => {
 
         await interaction.deferReply();
         const result = await syncGardens(interaction.guild);
-        await syncAllGardenTopics(interaction.guild);
         const errorText = result.errors.length > 0
           ? `\nErrors (${result.errors.length}):\n${result.errors.slice(0, 5).join('\n')}`
           : '';
@@ -327,7 +361,7 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         await interaction.reply({
-          embeds: [buildStatusEmbed(status, interaction.user.id)],
+          embeds: [buildStatusEmbed(status, interaction.member.displayName)],
         });
         return;
       }
@@ -375,6 +409,8 @@ client.on('interactionCreate', async (interaction) => {
           }
         }
 
+        const useNicknames = interaction.options.getBoolean('use_nicknames');
+
         const config = await updateGuildConfig(guildId, {
           spawnHour: interaction.options.getInteger('spawn_hour'),
           trickleEndHour: interaction.options.getInteger('trickle_end_hour'),
@@ -383,6 +419,7 @@ client.on('interactionCreate', async (interaction) => {
           maxWeeds: interaction.options.getInteger('max_weeds'),
           basePayout: interaction.options.getInteger('base_payout'),
           defaultTimezone,
+          useNicknamesForChannels: useNicknames ?? undefined,
         });
 
         await syncAllGardenTopics(interaction.guild);
@@ -541,7 +578,7 @@ client.on('interactionCreate', async (interaction) => {
 
     console.error(`unknown command: ${interaction.commandName}`);
   } catch (err) {
-    console.error(`Interaction error (${interaction.commandName}):`, err);
+    console.error(`Interaction error (${interactionLabel(interaction)}):`, err);
     const detail = err?.message ? ` ${err.message}` : '';
     await replyError(interaction, `Something went wrong handling that command.${detail}`);
   }

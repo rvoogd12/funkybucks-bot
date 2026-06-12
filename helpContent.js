@@ -33,16 +33,16 @@ export function buildCommandsEmbed() {
           cmdLine('/garden timezone zone:<eu|au|IANA>', 'Set your local spawn/settle timezone.'),
           cmdLine('/garden status', 'Today\'s weed progress and schedule.'),
           cmdLine('/garden leaderboard [limit]', 'All gardeners ranked (omit limit for everyone).'),
-          cmdLine('/garden config', 'Mods: tune spawn, trickle end, settle, weeds, payout.'),
+          cmdLine('/garden config', 'Mods: tune spawn, trickle end, settle, weeds, payout, channel names.'),
         ].join('\n'),
       },
       {
         name: 'Stats & General',
         value: [
-          cmdLine('/stats view [user]', 'Garden + funkybucks stats (dropdown: lifetime/month/year).'),
-          cmdLine('/stats leaderboard [limit]', 'Pick a topic, then period — peak FB, FB earned, perfect days, or weeds.'),
-          cmdLine('/hi', 'Say hi.'),
-          cmdLine('/help', 'This menu.'),
+          cmdLine('/stats view [user]', 'Funkybucks + garden stats (dropdown: lifetime/month/year).'),
+          cmdLine('/stats leaderboard [limit]', 'Image LB — pick topic, then period (peak FB, earned, streak, weeds, etc.).'),
+          cmdLine('/hi', 'Say hi! :D'),
+          cmdLine('/help', 'Show this menu.'),
         ].join('\n'),
       },
     );
@@ -93,11 +93,11 @@ export function buildEconomyEmbed() {
       },
       {
         name: 'Leaderboards & stats',
-        value: 'Bank leaderboard ranks by balance. `/stats view` tracks peak FB once held and FB earned (gardens + transfers).',
+        value: '`/bank leaderboard` ranks by balance. See peak FB once held, FB earned (gardens earnings + transfers), plus more with `/stats view`.',
       },
       {
         name: 'Bots',
-        value: 'The bot does not participate in the economy.',
+        value: 'Bots do not participate in the economy.',
       },
     );
 }
@@ -108,12 +108,8 @@ export function buildTipsEmbed() {
     .setColor(0x9b59b6)
     .addFields(
       {
-        name: 'Set your timezone first',
-        value: '`/garden timezone zone:au` for Australia/Brisbane, `zone:eu` for Europe/Amsterdam.\n(Or something like Australia/Sydney for more specific timezones)',
-      },
-      {
-        name: 'Check progress',
-        value: '`/garden status` shows weeds pulled, trickle remaining, and your streak.',
+        name: 'Check gardening status',
+        value: '`/garden status` shows weeds pulled, trickle remaining, and your streak, plus more.',
       },
       {
         name: 'Visit neighbors',
@@ -121,7 +117,7 @@ export function buildTipsEmbed() {
       },
       {
         name: 'Track stats',
-        value: '`/stats view` tracks peak FB once held, FB earned, weeds pulled, perfect/missed weed days, plus more! — per month, year, or lifetime.',
+        value: '`/stats view` tracks peak FB once held, FB earned, weeds pulled, perfect/missed weed days, plus more! — per month, year, or lifetime.\n`/stats leaderboard` shows a leaderboard of the top users for a chosen topic.',
       },
     );
 }
@@ -136,7 +132,7 @@ export const HELP_CATEGORIES = {
 export function buildHelpIntroEmbed() {
   return new EmbedBuilder()
     .setTitle('Funkybucks Help')
-    .setDescription('Pick a category below. Edit categories in `helpContent.js`.')
+    .setDescription('Pick a category below.')
     .setColor(0x00d4ff);
 }
 

@@ -9,8 +9,15 @@ import {
 } from 'discord.js';
 import { addBalance } from './bank.js';
 import { assignCompetitionRanks } from './ranking.js';
-import { recordWeedCleared, recordPerfectDay, recordMissedDay } from './stats.js';
+import {
+  recordWeedCleared,
+  recordPerfectDay,
+  recordMissedDay,
+  recordLongestStreak,
+  monthKeyForTimezone,
+} from './stats.js';
 import { acquireGardenTickLock } from './gardenLock.js';
+import { getMemberMap } from './guildMembers.js';
 import {
   spawnFlavorMessage,
   trickleFlavorMessage,
@@ -44,6 +51,7 @@ export const DEFAULT_GUILD_CONFIG = {
   defaultTimezone: TZ_PRESETS.eu,
   trickleIntervalMinutes: 45,
   trickleBatchMax: 3,
+  useNicknamesForChannels: false,
 };
 
 const WEED_EMOJIS = ['🌿', '🌱', '🪴', '🍀', '🌵', '☘️'];
@@ -84,6 +92,9 @@ function ensureGuild(gardens, guildId) {
   if (gardens[guildId].config.trickleEndHour === undefined) {
     gardens[guildId].config.trickleEndHour = DEFAULT_GUILD_CONFIG.trickleEndHour;
   }
+  if (gardens[guildId].config.useNicknamesForChannels === undefined) {
+    gardens[guildId].config.useNicknamesForChannels = DEFAULT_GUILD_CONFIG.useNicknamesForChannels;
+  }
   return gardens[guildId];
 }
 
@@ -105,6 +116,27 @@ export function channelNameFromDisplayName(displayName, userId = null) {
   const base = `${slugifyDisplayName(displayName)}-s-garden`;
   if (!userId) return base.slice(0, 100);
   return `${base}-${userId.slice(-6)}`.slice(0, 100);
+}
+
+export function resolveGardenChannelLabel(member, config) {
+  if (config?.useNicknamesForChannels) {
+    return member.displayName;
+  }
+  return member.user.username;
+}
+
+export function buildChannelSlug(member, config) {
+  const label = resolveGardenChannelLabel(member, config);
+  let slug = slugifyDisplayName(label);
+  if (slug === 'gardener') {
+    slug = slugifyDisplayName(member.user.username);
+  }
+  return slug || 'gardener';
+}
+
+export function channelNameFromMember(member, config) {
+  const slug = buildChannelSlug(member, config);
+  return `${slug}-s-garden-${member.id.slice(-6)}`.slice(0, 100);
 }
 
 async function assertBotGardenPermissions(guild) {
@@ -164,6 +196,19 @@ function localToday(timezone) {
 
 function localHour(timezone) {
   return DateTime.now().setZone(timezone).hour;
+}
+
+function minutesUntilTrickleEnd(timezone, trickleEndHour) {
+  const now = DateTime.now().setZone(timezone);
+  const end = now.set({ hour: trickleEndHour, minute: 0, second: 0, millisecond: 0 });
+  return end.diff(now, 'minutes').minutes;
+}
+
+function effectiveTrickleRemaining(garden, timezone, trickleEndHour) {
+  const remaining = garden.trickleRemaining || 0;
+  if (remaining <= 0) return 0;
+  if (localHour(timezone) >= trickleEndHour) return 0;
+  return remaining;
 }
 
 function updateMonthlyStats(garden) {
@@ -254,7 +299,7 @@ export async function createGardenChannel(guild, member, guildData, { save = tru
   const topic = gardenTopic(displayName, config);
 
   const channel = await guild.channels.create({
-    name: channelNameFromDisplayName(displayName, member.id),
+    name: channelNameFromMember(member, config),
     type: ChannelType.GuildText,
     parent: category.id,
     topic: topic.text,
@@ -291,7 +336,7 @@ export async function setupGardens(guild) {
   const guildData = ensureGuild(gardens, guild.id);
   await ensureCategory(guild, guildData);
 
-  const members = await guild.members.fetch();
+  const members = await getMemberMap(guild);
   let created = 0;
   let skipped = 0;
   const errors = [];
@@ -330,10 +375,11 @@ export async function syncGardens(guild) {
   const guildData = ensureGuild(gardens, guild.id);
   await ensureCategory(guild, guildData);
 
-  const members = await guild.members.fetch();
+  const members = await getMemberMap(guild);
   let created = 0;
   let fixed = 0;
   const errors = [];
+  const config = guildData.config;
 
   for (const member of members.values()) {
     if (member.user.bot) continue;
@@ -356,7 +402,10 @@ export async function syncGardens(guild) {
       }
 
       await applyGardenPermissions(guild, channel, member.id);
-      const config = guildData.config;
+      const expectedName = channelNameFromMember(member, config);
+      if (channel.name !== expectedName) {
+        await channel.setName(expectedName, 'Sync garden channel name');
+      }
       const expectedTopic = gardenTopic(member.displayName, config);
       if (channel.topic !== expectedTopic.text) {
         await channel.setTopic(expectedTopic.text, 'Sync garden topic');
@@ -368,6 +417,7 @@ export async function syncGardens(guild) {
   }
 
   await saveGardens(gardens);
+  await syncAllGardenTopics(guild, members);
   return { created, fixed, errors };
 }
 
@@ -497,6 +547,21 @@ export async function spawnWeedsForGarden(client, guild, userId, guildData) {
   return true;
 }
 
+async function flushTrickleWeeds(guild, userId, guildData) {
+  const garden = guildData.gardens[userId];
+  if (!garden?.channelId || garden.locked || garden.trickleRemaining <= 0) return false;
+
+  const channel = guild.channels.cache.get(garden.channelId)
+    ?? await guild.channels.fetch(garden.channelId).catch(() => null);
+  if (!channel) return false;
+
+  const count = garden.trickleRemaining;
+  await sendWeedMessages(channel, count, garden);
+  garden.trickleRemaining = 0;
+  garden.lastTrickleAt = DateTime.now().toISO();
+  return true;
+}
+
 export async function trickleWeedsForGarden(guild, userId, guildData) {
   const garden = guildData.gardens[userId];
   if (!garden?.channelId || garden.locked || garden.trickleRemaining <= 0) return false;
@@ -507,7 +572,12 @@ export async function trickleWeedsForGarden(guild, userId, guildData) {
   const hour = localHour(garden.timezone);
   const config = guildData.config;
   const trickleEnd = config.trickleEndHour ?? DEFAULT_GUILD_CONFIG.trickleEndHour;
-  if (hour < config.spawnHour || hour >= trickleEnd) return false;
+  if (hour < config.spawnHour || hour >= trickleEnd) {
+    if (hour >= trickleEnd) {
+      garden.trickleRemaining = 0;
+    }
+    return false;
+  }
 
   const lastTrickle = garden.lastTrickleAt
     ? DateTime.fromISO(garden.lastTrickleAt)
@@ -577,18 +647,22 @@ export async function settleGarden(client, guild, userId, guildData, excludeBotI
 
   updateMonthlyStats(garden);
 
+  const tz = garden.timezone || config.defaultTimezone;
+  const statsMonthKey = monthKeyForTimezone(tz);
+
   if (allPulled) {
     payout = config.basePayout;
     garden.streak = (garden.streak || 0) + 1;
     garden.perfectDaysThisMonth = (garden.perfectDaysThisMonth || 0) + 1;
     if (!garden.locked && !(excludeBotId && userId === excludeBotId)) {
       await addBalance(guild.id, userId, payout, excludeBotId);
-      await recordPerfectDay(guild.id, userId, payout);
+      await recordPerfectDay(guild.id, userId, payout, statsMonthKey);
+      await recordLongestStreak(guild.id, userId, garden.streak, statsMonthKey);
     }
-  } else {
+  } else if (garden.activeWeeds.length > 0) {
     garden.streak = 0;
-    if (garden.activeWeeds.length > 0 && !(excludeBotId && userId === excludeBotId)) {
-      await recordMissedDay(guild.id, userId);
+    if (!garden.locked && !(excludeBotId && userId === excludeBotId)) {
+      await recordMissedDay(guild.id, userId, statsMonthKey);
     }
   }
 
@@ -663,14 +737,26 @@ export async function processGardenTick(client, guildId) {
       continue;
     }
 
+    const trickleEnd = config.trickleEndHour ?? DEFAULT_GUILD_CONFIG.trickleEndHour;
     if (
       hour >= config.spawnHour
       && hour < config.settleHour
       && garden.lastSpawnDate === today
       && garden.trickleRemaining > 0
     ) {
-      const trickled = await trickleWeedsForGarden(guild, userId, guildData);
-      if (trickled) changed = true;
+      if (hour >= trickleEnd) {
+        garden.trickleRemaining = 0;
+        changed = true;
+      } else {
+        const minsLeft = minutesUntilTrickleEnd(tz, trickleEnd);
+        if (minsLeft <= config.trickleIntervalMinutes) {
+          const flushed = await flushTrickleWeeds(guild, userId, guildData);
+          if (flushed) changed = true;
+        } else {
+          const trickled = await trickleWeedsForGarden(guild, userId, guildData);
+          if (trickled) changed = true;
+        }
+      }
     }
   }
 
@@ -732,7 +818,8 @@ export async function getGardenStatus(guildId, userId) {
   const active = garden.activeWeeds || [];
   const pulled = active.filter((w) => w.pulled).length;
   const total = active.length;
-  const trickle = garden.trickleRemaining || 0;
+  const trickleEndHour = config.trickleEndHour ?? DEFAULT_GUILD_CONFIG.trickleEndHour;
+  const trickle = effectiveTrickleRemaining(garden, tz, trickleEndHour);
 
   return {
     hasGarden: true,
@@ -762,6 +849,7 @@ export async function updateGuildConfig(guildId, updates) {
   const allowed = [
     'spawnHour', 'trickleEndHour', 'settleHour', 'minWeeds', 'maxWeeds',
     'basePayout', 'defaultTimezone', 'trickleIntervalMinutes', 'trickleBatchMax',
+    'useNicknamesForChannels',
   ];
 
   for (const key of allowed) {
@@ -789,7 +877,7 @@ export async function getGardenLeaderboard(guild, { limit = null, excludeBotId =
   const guildData = gardens[guild.id];
   const gardenMap = guildData?.gardens || {};
   const currentMonth = DateTime.now().toFormat('yyyy-MM');
-  const members = await guild.members.fetch();
+  const members = await getMemberMap(guild);
 
   const entries = [];
   for (const member of members.values()) {
@@ -821,13 +909,13 @@ export async function getGardenLeaderboard(guild, { limit = null, excludeBotId =
   return ranked;
 }
 
-export async function syncAllGardenTopics(guild) {
+export async function syncAllGardenTopics(guild, membersInput = null) {
   const gardens = await loadGardens();
   const guildData = gardens[guild.id];
   if (!guildData?.gardens) return 0;
 
   const config = guildData.config;
-  const members = await guild.members.fetch();
+  const members = membersInput ?? await getMemberMap(guild);
   let updated = 0;
 
   for (const [userId, garden] of Object.entries(guildData.gardens)) {
@@ -867,7 +955,7 @@ export async function updateGardenChannelForMember(guild, member) {
   if (!channel) return false;
 
   const config = guildData.config;
-  const newName = channelNameFromDisplayName(member.displayName, member.id);
+  const newName = channelNameFromMember(member, config);
   const newTopic = gardenTopic(member.displayName, config);
 
   if (channel.name !== newName) {

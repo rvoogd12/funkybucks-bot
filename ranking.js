@@ -27,3 +27,10 @@ export function rankBadgeColorGarden(rank) {
   if (rank === 3) return '#a67c52';
   return '#4a7c59';
 }
+
+export function rankBadgeColorStats(rank) {
+  if (rank === 1) return '#e8b923';
+  if (rank === 2) return '#9b7ec8';
+  if (rank === 3) return '#7a5fa8';
+  return '#5c3d8a';
+}

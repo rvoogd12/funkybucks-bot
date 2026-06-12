@@ -12,7 +12,11 @@ const FONT_STACK = [
   'Noto Sans CJK JP',
   'Noto Sans CJK KR',
   'Noto Sans Arabic',
+  'Noto Sans Hebrew',
   'Noto Sans Devanagari',
+  'Noto Sans Bengali',
+  'Noto Sans Tamil',
+  'Noto Sans Georgian',
   'Noto Sans Thai',
   'Noto Sans Symbols 2',
   'Noto Sans Math',
@@ -26,11 +30,44 @@ const FONT_FILES = [
   { file: 'NotoSansCJKjp-Regular.otf', family: 'Noto Sans CJK JP', weight: 'normal' },
   { file: 'NotoSansCJKkr-Regular.otf', family: 'Noto Sans CJK KR', weight: 'normal' },
   { file: 'NotoSansArabic-Regular.ttf', family: 'Noto Sans Arabic', weight: 'normal' },
+  { file: 'NotoSansHebrew-Regular.ttf', family: 'Noto Sans Hebrew', weight: 'normal' },
   { file: 'NotoSansDevanagari-Regular.ttf', family: 'Noto Sans Devanagari', weight: 'normal' },
+  { file: 'NotoSansBengali-Regular.ttf', family: 'Noto Sans Bengali', weight: 'normal' },
+  { file: 'NotoSansTamil-Regular.ttf', family: 'Noto Sans Tamil', weight: 'normal' },
+  { file: 'NotoSansGeorgian-Regular.ttf', family: 'Noto Sans Georgian', weight: 'normal' },
   { file: 'NotoSansThai-Regular.ttf', family: 'Noto Sans Thai', weight: 'normal' },
   { file: 'NotoSansSymbols2-Regular.ttf', family: 'Noto Sans Symbols 2', weight: 'normal' },
   { file: 'NotoSansMath-Regular.ttf', family: 'Noto Sans Math', weight: 'normal' },
 ];
+
+const graphemeSegmenter = typeof Intl !== 'undefined' && Intl.Segmenter
+  ? new Intl.Segmenter('en', { granularity: 'grapheme' })
+  : null;
+
+function graphemeSegments(text) {
+  if (!text) return [];
+  if (graphemeSegmenter) {
+    return [...graphemeSegmenter.segment(text)].map((part) => part.segment);
+  }
+  return [...text];
+}
+
+function drawTextGraphemes(ctx, text, x, y) {
+  let cursorX = x;
+  for (const grapheme of graphemeSegments(text)) {
+    ctx.fillText(grapheme, cursorX, y);
+    cursorX += ctx.measureText(grapheme).width;
+  }
+  return cursorX - x;
+}
+
+function measureTextGraphemes(ctx, text) {
+  let width = 0;
+  for (const grapheme of graphemeSegments(text)) {
+    width += ctx.measureText(grapheme).width;
+  }
+  return width;
+}
 
 let fontsRegistered = false;
 const twemojiCache = new Map();
@@ -113,7 +150,7 @@ function splitTextAndEmoji(text) {
 
 async function measureSegmentWidth(ctx, segment, emojiSize) {
   if (segment.type === 'text') {
-    return ctx.measureText(segment.value).width;
+    return measureTextGraphemes(ctx, segment.value);
   }
   const codepoint = emojiToTwemojiCodepoint(segment.value);
   const image = await loadTwemoji(codepoint);
@@ -180,8 +217,7 @@ export async function drawCanvasText(ctx, text, x, y, {
   for (const segment of segments) {
     if (segment.type === 'text') {
       if (segment.value) {
-        ctx.fillText(segment.value, cursorX, y);
-        cursorX += ctx.measureText(segment.value).width;
+        cursorX += drawTextGraphemes(ctx, segment.value, cursorX, y);
       }
       continue;
     }
@@ -228,10 +264,20 @@ export async function fetchGuildName(guildId, token) {
   }
 }
 
+export function avatarUrlForUser(user) {
+  if (!user?.id) return null;
+  if (user.avatar) {
+    const ext = user.avatar.startsWith('a_') ? 'gif' : 'png';
+    return `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.${ext}?size=64`;
+  }
+  const index = Number((BigInt(user.id) >> 22n) % 6n);
+  return `https://cdn.discordapp.com/embed/avatars/${index}.png?size=64`;
+}
+
 export async function loadAvatarImage(user) {
-  if (!user?.avatar) return null;
+  if (!user?.id) return null;
   try {
-    const avatarUrl = `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png?size=64`;
+    const avatarUrl = avatarUrlForUser(user);
     const res = await fetch(avatarUrl);
     if (!res.ok) return null;
     const buffer = await res.arrayBuffer();

@@ -196,8 +196,8 @@ function formatProgress(status) {
   return 'No active weeds right now';
 }
 
-export function buildStatusEmbed(status, userId = null) {
-  const label = userId ? `<@${userId}>'s Garden` : 'Your Garden';
+export function buildStatusEmbed(status, displayName = null) {
+  const label = displayName ? `${displayName}'s Garden` : 'Your Garden';
   const channel = status.channelId ? `<#${status.channelId}>` : '—';
 
   return new EmbedBuilder()
@@ -257,6 +257,7 @@ export function configUpdatedMessage(config) {
     `Weeds/day: **${config.minWeeds}–${config.maxWeeds}**`,
     `Payout: **${formatNumber(config.basePayout)}** funkybucks`,
     `Default timezone: **${config.defaultTimezone}**`,
+    `Channel names: **${config.useNicknamesForChannels ? 'nicknames' : 'usernames'}**`,
   ].join('\n');
 }
 

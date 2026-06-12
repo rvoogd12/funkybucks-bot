@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { assignCompetitionRanks } from './ranking.js';
 import { recordBalancePeak } from './stats.js';
+import { getMemberMap } from './guildMembers.js';
 
 const ACCOUNTS_FILE = new URL('./data/accounts.json', import.meta.url);
 const accountsFilePath = fileURLToPath(ACCOUNTS_FILE);
@@ -92,7 +93,7 @@ export async function transferBalance(guildId, fromUserId, toUserId, amount, exc
 export async function getLeaderboardBalances(guild, { limit = null, excludeBotId = null } = {}) {
   const accounts = await loadAccounts();
   const guildAccounts = accounts[guild.id] || {};
-  const members = await guild.members.fetch();
+  const members = await getMemberMap(guild);
 
   const entries = [];
   for (const member of members.values()) {

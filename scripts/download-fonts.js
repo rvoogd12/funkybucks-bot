@@ -26,8 +26,24 @@ const FONTS = [
     url: 'https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansArabic/NotoSansArabic-Regular.ttf',
   },
   {
+    file: 'NotoSansHebrew-Regular.ttf',
+    url: 'https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansHebrew/NotoSansHebrew-Regular.ttf',
+  },
+  {
     file: 'NotoSansDevanagari-Regular.ttf',
     url: 'https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansDevanagari/NotoSansDevanagari-Regular.ttf',
+  },
+  {
+    file: 'NotoSansBengali-Regular.ttf',
+    url: 'https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansBengali/NotoSansBengali-Regular.ttf',
+  },
+  {
+    file: 'NotoSansTamil-Regular.ttf',
+    url: 'https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansTamil/NotoSansTamil-Regular.ttf',
+  },
+  {
+    file: 'NotoSansGeorgian-Regular.ttf',
+    url: 'https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansGeorgian/NotoSansGeorgian-Regular.ttf',
   },
   {
     file: 'NotoSansThai-Regular.ttf',

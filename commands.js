@@ -15,7 +15,7 @@ const commandBuilders = [
     .setIntegrationTypes(ApplicationIntegrationType.GuildInstall, ApplicationIntegrationType.UserInstall),
   new SlashCommandBuilder()
     .setName('help')
-    .setDescription('Show Funkybucks command help')
+    .setDescription('Show Funkybucks help')
     .setContexts(InteractionContextType.Guild, InteractionContextType.BotDM, InteractionContextType.PrivateChannel)
     .setIntegrationTypes(ApplicationIntegrationType.GuildInstall, ApplicationIntegrationType.UserInstall),
   new SlashCommandBuilder()
@@ -45,11 +45,11 @@ const commandBuilders = [
     .addSubcommand((sub) =>
       sub
         .setName('leaderboard')
-        .setDescription('Show top funkybucks in the server')
+        .setDescription('Show top funkybucks holders in the server')
         .addIntegerOption((option) =>
           option
             .setName('limit')
-            .setDescription('How many to show (omit for all server members)')
+            .setDescription('How many users to show (omit for all server members)')
             .setRequired(false)
             .setMinValue(1)
             .setMaxValue(100),
@@ -93,7 +93,7 @@ const commandBuilders = [
     .addSubcommand((sub) =>
       sub
         .setName('sync')
-        .setDescription('Mods only: create missing gardens and fix permissions'),
+        .setDescription('Mods only: create missing gardens and fix permissions, names, topics, etc.'),
     )
     .addSubcommand((sub) =>
       sub
@@ -102,7 +102,7 @@ const commandBuilders = [
         .addStringOption((option) =>
           option
             .setName('zone')
-            .setDescription('eu, au (Brisbane), Europe/Amsterdam, etc.')
+            .setDescription('eu (Amsterdam aka most of Europe), au (Brisbane), Europe/Sydney, etc.')
             .setRequired(true),
         ),
     )
@@ -114,11 +114,11 @@ const commandBuilders = [
     .addSubcommand((sub) =>
       sub
         .setName('leaderboard')
-        .setDescription('Show top garden streaks and perfect days this month')
+        .setDescription('Show top garden streaks and perfect days (this month, year, or lifetime)')
         .addIntegerOption((option) =>
           option
             .setName('limit')
-            .setDescription('How many to show (omit for all server members)')
+            .setDescription('How many users to show (omit for all server members)')
             .setRequired(false)
             .setMinValue(1)
             .setMaxValue(100),
@@ -148,17 +148,22 @@ const commandBuilders = [
         )
         .addStringOption((option) =>
           option.setName('default_timezone').setDescription('Default TZ for new gardens (eu, au, or IANA)'),
+        )
+        .addBooleanOption((option) =>
+          option
+            .setName('use_nicknames')
+            .setDescription('Use server nicknames for garden channel names (default: username)'),
         ),
     ),
   new SlashCommandBuilder()
     .setName('stats')
-    .setDescription('View garden and funkybucks stats for the server')
+    .setDescription('View funkybucks and garden stats for the server')
     .setContexts(InteractionContextType.Guild)
     .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
     .addSubcommand((sub) =>
       sub
         .setName('view')
-        .setDescription('Show garden and funkybucks stats for a user')
+        .setDescription('Show funkybucks and garden stats for a user')
         .addUserOption((option) =>
           option.setName('user').setDescription('User to view (defaults to you)').setRequired(false),
         ),
@@ -166,11 +171,11 @@ const commandBuilders = [
     .addSubcommand((sub) =>
       sub
         .setName('leaderboard')
-        .setDescription('Rank members — pick topic, then period (peak FB, earned, perfect days, weeds)')
+        .setDescription('Rank members — pick topic, then period (peak FB, earned, perfect days, weeds, etc.)')
         .addIntegerOption((option) =>
           option
             .setName('limit')
-            .setDescription('How many to show (omit for all members)')
+            .setDescription('How many users to show (omit for all members)')
             .setRequired(false)
             .setMinValue(1)
             .setMaxValue(100),
