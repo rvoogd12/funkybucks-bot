@@ -22,6 +22,10 @@ const FONTS = [
     url: 'https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansMath/NotoSansMath-Regular.ttf',
   },
   {
+    file: 'NotoSansCanadianAboriginal-Regular.ttf',
+    url: 'https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansCanadianAboriginal/NotoSansCanadianAboriginal-Regular.ttf',
+  },
+  {
     file: 'NotoSansArabic-Regular.ttf',
     url: 'https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansArabic/NotoSansArabic-Regular.ttf',
   },
@@ -96,5 +100,5 @@ async function main() {
 main().catch((err) => {
   console.error('Font download failed:', err.message);
   console.error('Leaderboard images may show missing glyphs until fonts are installed.');
-  process.exit(1);
+  process.exit(0);
 });

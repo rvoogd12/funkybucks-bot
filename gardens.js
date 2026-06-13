@@ -143,15 +143,72 @@ async function assertBotGardenPermissions(guild) {
   const me = guild.members.me ?? await guild.members.fetchMe();
   const required = [
     PermissionFlagsBits.ManageChannels,
+    PermissionFlagsBits.ManageRoles,
     PermissionFlagsBits.ViewChannel,
     PermissionFlagsBits.SendMessages,
     PermissionFlagsBits.ManageMessages,
   ];
   const missing = required.filter((perm) => !me.permissions.has(perm));
   if (missing.length > 0) {
-    throw new Error('Bot is missing required permissions: Manage Channels, View Channels, Send Messages, and Manage Messages.');
+    throw new Error('Bot is missing required permissions: Manage Channels, Manage Roles, View Channels, Send Messages, and Manage Messages.');
   }
   return me;
+}
+
+function botChannelPerms(channel, botMember) {
+  return channel.permissionsFor(botMember);
+}
+
+async function applyGardenPermissions(guild, channel, ownerId) {
+  const botMember = guild.members.me ?? await guild.members.fetchMe();
+  const botPerms = botChannelPerms(channel, botMember);
+  if (!botPerms?.has(PermissionFlagsBits.ManageChannels)) {
+    throw new Error('Missing Permissions');
+  }
+
+  const overwrites = buildPermissionOverwrites(guild, ownerId, botMember);
+  const ownerInGuild = guild.members.cache.has(ownerId)
+    || await guild.members.fetch(ownerId).then(() => true).catch(() => false);
+
+  for (const ow of overwrites) {
+    if (ow.id === ownerId && !ownerInGuild) continue;
+    await channel.permissionOverwrites.edit(ow.id, {
+      type: ow.type,
+      allow: ow.allow,
+      deny: ow.deny,
+    });
+  }
+}
+
+async function repairGardenChannel(guild, guildData, member, channel, category, botMember) {
+  const config = guildData.config;
+  let changes = 0;
+
+  if (channel.parentId !== category.id) {
+    await channel.setParent(category.id, { lockPermissions: false });
+    changes += 1;
+  }
+
+  const perms = botChannelPerms(channel, botMember);
+  if (!perms?.has(PermissionFlagsBits.ManageChannels)) {
+    throw new Error('Missing Permissions');
+  }
+
+  await applyGardenPermissions(guild, channel, member.id);
+
+  const expectedName = channelNameFromMember(member, config);
+  if (channel.name !== expectedName) {
+    await channel.setName(expectedName, 'Sync garden channel name');
+    changes += 1;
+  }
+
+  const expectedTopic = gardenTopic(member.displayName, config);
+  if (channel.topic !== expectedTopic.text) {
+    await channel.setTopic(expectedTopic.text, 'Sync garden topic');
+    changes += 1;
+  }
+
+  return changes;
 }
 
 export { gardenTopic } from './gardenFlavor.js';
@@ -260,10 +317,25 @@ function buildPermissionOverwrites(guild, ownerId, botMember) {
 }
 
 async function ensureCategory(guild, guildData) {
+  const botMember = guild.members.me ?? await guild.members.fetchMe();
+
   if (guildData.categoryId) {
     const existing = guild.channels.cache.get(guildData.categoryId)
       ?? await guild.channels.fetch(guildData.categoryId).catch(() => null);
     if (existing?.type === ChannelType.GuildCategory) {
+      const catPerms = existing.permissionsFor(botMember);
+      if (!catPerms?.has(PermissionFlagsBits.ManageChannels)) {
+        await existing.permissionOverwrites.edit(botMember.id, {
+          type: OverwriteType.Member,
+          allow: [
+            PermissionFlagsBits.ViewChannel,
+            PermissionFlagsBits.ManageChannels,
+            PermissionFlagsBits.ManageRoles,
+            PermissionFlagsBits.SendMessages,
+            PermissionFlagsBits.ManageMessages,
+          ],
+        }).catch(() => {});
+      }
       return existing;
     }
   }
@@ -272,6 +344,19 @@ async function ensureCategory(guild, guildData) {
     name: CATEGORY_NAME,
     type: ChannelType.GuildCategory,
     reason: 'Funkybucks garden category',
+    permissionOverwrites: [
+      {
+        id: botMember.id,
+        type: OverwriteType.Member,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.ManageChannels,
+          PermissionFlagsBits.ManageRoles,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.ManageMessages,
+        ],
+      },
+    ],
   });
   guildData.categoryId = category.id;
   return category;
@@ -324,11 +409,6 @@ export async function createGardenChannel(guild, member, guildData, { save = tru
   return { channel, created: true };
 }
 
-async function applyGardenPermissions(guild, channel, ownerId) {
-  const botMember = guild.members.me ?? await guild.members.fetchMe();
-  await channel.permissionOverwrites.set(buildPermissionOverwrites(guild, ownerId, botMember));
-}
-
 export async function setupGardens(guild) {
   await assertBotGardenPermissions(guild);
 
@@ -369,55 +449,62 @@ export async function setupGardens(guild) {
 }
 
 export async function syncGardens(guild) {
-  await assertBotGardenPermissions(guild);
+  const botMember = await assertBotGardenPermissions(guild);
 
   const gardens = await loadGardens();
   const guildData = ensureGuild(gardens, guild.id);
-  await ensureCategory(guild, guildData);
+  const category = await ensureCategory(guild, guildData);
 
   const members = await getMemberMap(guild);
   let created = 0;
   let fixed = 0;
   const errors = [];
-  const config = guildData.config;
 
   for (const member of members.values()) {
     if (member.user.bot) continue;
     try {
       const garden = getGardenRecord(guildData, member.id);
       if (!garden.channelId) {
-        await createGardenChannel(guild, member, guildData, { save: false, sendWelcome: true });
+        await createGardenChannel(guild, member, guildData, { save: false, sendWelcome: false });
         created++;
         continue;
       }
 
-      const channel = guild.channels.cache.get(garden.channelId)
+      let channel = guild.channels.cache.get(garden.channelId)
         ?? await guild.channels.fetch(garden.channelId).catch(() => null);
 
       if (!channel) {
         garden.channelId = null;
-        await createGardenChannel(guild, member, guildData, { save: false, sendWelcome: true });
+        await createGardenChannel(guild, member, guildData, { save: false, sendWelcome: false });
         created++;
         continue;
       }
 
-      await applyGardenPermissions(guild, channel, member.id);
-      const expectedName = channelNameFromMember(member, config);
-      if (channel.name !== expectedName) {
-        await channel.setName(expectedName, 'Sync garden channel name');
-      }
-      const expectedTopic = gardenTopic(member.displayName, config);
-      if (channel.topic !== expectedTopic.text) {
-        await channel.setTopic(expectedTopic.text, 'Sync garden topic');
-      }
-      fixed++;
+      fixed += await repairGardenChannel(guild, guildData, member, channel, category, botMember);
     } catch (err) {
       errors.push(`${member.displayName}: ${err.message}`);
     }
   }
 
+  for (const [userId, garden] of Object.entries(guildData.gardens)) {
+    if (!garden.channelId || members.has(userId)) continue;
+    try {
+      const channel = guild.channels.cache.get(garden.channelId)
+        ?? await guild.channels.fetch(garden.channelId).catch(() => null);
+      if (!channel) {
+        garden.channelId = null;
+        continue;
+      }
+      if (channel.parentId !== category.id) {
+        await channel.setParent(category.id, { lockPermissions: false });
+        fixed += 1;
+      }
+    } catch (err) {
+      errors.push(`Garden ${userId.slice(-6)}: ${err.message}`);
+    }
+  }
+
   await saveGardens(gardens);
-  await syncAllGardenTopics(guild, members);
   return { created, fixed, errors };
 }
 

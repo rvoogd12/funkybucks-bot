@@ -8,6 +8,9 @@ const projectDir = path.dirname(fileURLToPath(import.meta.url));
 
 const FONT_STACK = [
   'Noto Sans',
+  'Noto Sans Math',
+  'Noto Sans Symbols 2',
+  'Noto Sans Canadian Aboriginal',
   'Noto Sans CJK SC',
   'Noto Sans CJK JP',
   'Noto Sans CJK KR',
@@ -18,8 +21,6 @@ const FONT_STACK = [
   'Noto Sans Tamil',
   'Noto Sans Georgian',
   'Noto Sans Thai',
-  'Noto Sans Symbols 2',
-  'Noto Sans Math',
   'sans-serif',
 ];
 
@@ -38,6 +39,23 @@ const FONT_FILES = [
   { file: 'NotoSansThai-Regular.ttf', family: 'Noto Sans Thai', weight: 'normal' },
   { file: 'NotoSansSymbols2-Regular.ttf', family: 'Noto Sans Symbols 2', weight: 'normal' },
   { file: 'NotoSansMath-Regular.ttf', family: 'Noto Sans Math', weight: 'normal' },
+  { file: 'NotoSansCanadianAboriginal-Regular.ttf', family: 'Noto Sans Canadian Aboriginal', weight: 'normal' },
+];
+
+const CODEPOINT_FONT_RANGES = [
+  { start: 0x1D400, end: 0x1D7FF, family: 'Noto Sans Math' },
+  { start: 0x1400, end: 0x167F, family: 'Noto Sans Canadian Aboriginal' },
+  { start: 0x0600, end: 0x06FF, family: 'Noto Sans Arabic' },
+  { start: 0x0590, end: 0x05FF, family: 'Noto Sans Hebrew' },
+  { start: 0x0900, end: 0x097F, family: 'Noto Sans Devanagari' },
+  { start: 0x0980, end: 0x09FF, family: 'Noto Sans Bengali' },
+  { start: 0x0B80, end: 0x0BFF, family: 'Noto Sans Tamil' },
+  { start: 0x10A0, end: 0x10FF, family: 'Noto Sans Georgian' },
+  { start: 0x0E00, end: 0x0E7F, family: 'Noto Sans Thai' },
+  { start: 0x4E00, end: 0x9FFF, family: 'Noto Sans CJK SC' },
+  { start: 0x3040, end: 0x30FF, family: 'Noto Sans CJK JP' },
+  { start: 0xAC00, end: 0xD7AF, family: 'Noto Sans CJK KR' },
+  { start: 0x2000, end: 0x2BFF, family: 'Noto Sans Symbols 2' },
 ];
 
 const graphemeSegmenter = typeof Intl !== 'undefined' && Intl.Segmenter
@@ -52,18 +70,33 @@ function graphemeSegments(text) {
   return [...text];
 }
 
-function drawTextGraphemes(ctx, text, x, y) {
+function pickFontFamilyForCodePoint(cp) {
+  for (const range of CODEPOINT_FONT_RANGES) {
+    if (cp >= range.start && cp <= range.end) return range.family;
+  }
+  return 'Noto Sans';
+}
+
+function ctxFontForGrapheme(grapheme, fontSize, weight) {
+  const cp = grapheme.codePointAt(0) ?? 0;
+  const family = pickFontFamilyForCodePoint(cp);
+  return `${weight} ${fontSize}px "${family}", ${FONT_STACK.map((n) => `"${n}"`).join(', ')}`;
+}
+
+function drawTextGraphemes(ctx, text, x, y, fontSize = 18, weight = 'normal') {
   let cursorX = x;
   for (const grapheme of graphemeSegments(text)) {
+    ctx.font = ctxFontForGrapheme(grapheme, fontSize, weight);
     ctx.fillText(grapheme, cursorX, y);
     cursorX += ctx.measureText(grapheme).width;
   }
   return cursorX - x;
 }
 
-function measureTextGraphemes(ctx, text) {
+function measureTextGraphemes(ctx, text, fontSize = 18, weight = 'normal') {
   let width = 0;
   for (const grapheme of graphemeSegments(text)) {
+    ctx.font = ctxFontForGrapheme(grapheme, fontSize, weight);
     width += ctx.measureText(grapheme).width;
   }
   return width;
@@ -148,26 +181,26 @@ function splitTextAndEmoji(text) {
   return segments;
 }
 
-async function measureSegmentWidth(ctx, segment, emojiSize) {
+async function measureSegmentWidth(ctx, segment, emojiSize, fontSize, weight) {
   if (segment.type === 'text') {
-    return measureTextGraphemes(ctx, segment.value);
+    return measureTextGraphemes(ctx, segment.value, fontSize, weight);
   }
   const codepoint = emojiToTwemojiCodepoint(segment.value);
   const image = await loadTwemoji(codepoint);
   return image ? emojiSize + 2 : ctx.measureText(segment.value).width;
 }
 
-async function measureRichTextWidth(ctx, text, emojiSize) {
+async function measureRichTextWidth(ctx, text, emojiSize, fontSize, weight) {
   const segments = splitTextAndEmoji(text);
   let width = 0;
   for (const segment of segments) {
-    width += await measureSegmentWidth(ctx, segment, emojiSize);
+    width += await measureSegmentWidth(ctx, segment, emojiSize, fontSize, weight);
   }
   return width;
 }
 
-async function truncateRichText(ctx, text, maxWidth, emojiSize) {
-  if (!maxWidth || (await measureRichTextWidth(ctx, text, emojiSize)) <= maxWidth) {
+async function truncateRichText(ctx, text, maxWidth, emojiSize, fontSize, weight) {
+  if (!maxWidth || (await measureRichTextWidth(ctx, text, emojiSize, fontSize, weight)) <= maxWidth) {
     return text;
   }
 
@@ -179,7 +212,7 @@ async function truncateRichText(ctx, text, maxWidth, emojiSize) {
   while (low <= high) {
     const mid = Math.floor((low + high) / 2);
     const candidate = `${text.slice(0, mid).trimEnd()}${ellipsis}`;
-    const width = await measureRichTextWidth(ctx, candidate, emojiSize);
+    const width = await measureRichTextWidth(ctx, candidate, emojiSize, fontSize, weight);
     if (width <= maxWidth) {
       best = candidate;
       low = mid + 1;
@@ -208,7 +241,7 @@ export async function drawCanvasText(ctx, text, x, y, {
   ctx.textBaseline = 'alphabetic';
 
   const displayText = maxWidth
-    ? await truncateRichText(ctx, text, maxWidth, resolvedEmojiSize)
+    ? await truncateRichText(ctx, text, maxWidth, resolvedEmojiSize, fontSize, weight)
     : text;
 
   const segments = splitTextAndEmoji(displayText);
@@ -217,7 +250,7 @@ export async function drawCanvasText(ctx, text, x, y, {
   for (const segment of segments) {
     if (segment.type === 'text') {
       if (segment.value) {
-        cursorX += drawTextGraphemes(ctx, segment.value, cursorX, y);
+        cursorX += drawTextGraphemes(ctx, segment.value, cursorX, y, fontSize, weight);
       }
       continue;
     }

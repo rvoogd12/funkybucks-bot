@@ -19,6 +19,9 @@ jobs:
           test -f app.js
           test -f commands.js
 
+      - name: Download leaderboard fonts
+        run: node scripts/download-fonts.js
+
       - name: Deploy via SFTP
         env:
           SFTP_HOST: ${{ secrets.ORIHOST_SFTP_HOST }}
