@@ -30,7 +30,7 @@ export function buildCommandsEmbed() {
         name: 'Garden',
         value: [
           cmdLine('/garden setup / sync', 'Mods: create or fix garden channels.'),
-          cmdLine('/garden timezone zone:<eu|au|IANA>', 'Set your local spawn/settle timezone.'),
+          cmdLine('/timezone zone:<eu|au|IANA>', 'Set your local timezone for gardens and stats.'),
           cmdLine('/garden status', 'Today\'s weed progress and schedule.'),
           cmdLine('/garden leaderboard [limit]', 'All gardeners ranked (omit limit for everyone).'),
           cmdLine('/garden config', 'Mods: tune spawn, trickle end, settle, weeds, payout, channel names.'),
@@ -60,7 +60,15 @@ export function buildGardensEmbed() {
       },
       {
         name: 'Schedule',
-        value: 'Weeds spawn in the **morning** (burst + trickle until trickle-end hour). Pull all weeds before **settlement** in the evening to earn funkybucks.',
+        value: 'Weeds spawn in the **morning** (burst + trickle until trickle-end hour — no new weeds after that). Pull all weeds before **settlement** in the evening to earn funkybucks.',
+      },
+      {
+        name: 'Away from the server',
+        value: 'If you leave the server, your garden **pauses** (no weeds, no settlement, streak unchanged). Rejoin to pick up where you left off. Calendar months still roll over.',
+      },
+      {
+        name: 'Streaks & freezes',
+        value: 'Clear all weeds before settlement to grow your streak and earn funkybucks. Miss a day and you can spend a **streak freeze** to keep your streak (no payout that day). Everyone gets a set number of freezes per month (resets each month). Run out and your streak resets.',
       },
       {
         name: 'Visiting',
@@ -68,7 +76,7 @@ export function buildGardensEmbed() {
       },
       {
         name: 'Timezone',
-        value: 'Run `/garden timezone zone:eu` (Europe/Amsterdam) or `zone:au` (Australia/Brisbane) so spawn/settle match your local day.\n(Or something like Australia/Sydney for more specific timezones)',
+        value: 'Run `/timezone zone:eu` (Europe/Amsterdam) or `zone:au` (Australia/Brisbane) so spawn/settle and stats match your local day.\n(Or something like Australia/Sydney for more specific timezones)',
       },
       {
         name: '',
@@ -109,7 +117,7 @@ export function buildTipsEmbed() {
     .addFields(
       {
         name: 'Check gardening status',
-        value: '`/garden status` shows weeds pulled, trickle remaining, and your streak, plus more.',
+        value: '`/garden status` shows weeds pulled, trickle remaining, streak, plus more.',
       },
       {
         name: 'Visit neighbors',

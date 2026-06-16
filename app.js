@@ -24,6 +24,7 @@ import {
   setUserTimezone,
   getGardenStatus,
   updateGuildConfig,
+  getGardenerTimezoneMap,
   getGardenLeaderboard,
   syncAllGardenTopics,
   markWeedPulled,
@@ -87,6 +88,11 @@ function botId() {
   return getBotUserId(client);
 }
 
+async function gardenerTimezone(guildId, userId) {
+  const { timezones, defaultTimezone } = await getGardenerTimezoneMap(guildId);
+  return timezones[userId] ?? defaultTimezone;
+}
+
 function hasModeratorPermission(interaction) {
   const permissions = interaction.memberPermissions;
   if (!permissions) return false;
@@ -116,13 +122,16 @@ function botUserMessage() {
 async function replyStatsLeaderboardImage(interaction, topicKey, period, limit) {
   await interaction.deferUpdate();
   const guildId = interaction.guildId;
-  const top = await getStatsLeaderboard(interaction.guild, topicKey, period, limit, botId());
+  const { timezones, defaultTimezone } = await getGardenerTimezoneMap(guildId);
+  const top = await getStatsLeaderboard(
+    interaction.guild, topicKey, period, limit, botId(), defaultTimezone, timezones,
+  );
   const topic = STATS_LEADERBOARD_TOPICS[topicKey];
   const title = topic?.label ?? 'Stats';
 
   try {
     const imageBuffer = await generateStatsLeaderboardImage(
-      top, topicKey, period, guildId, process.env.DISCORD_TOKEN,
+      top, topicKey, period, guildId, process.env.DISCORD_TOKEN, defaultTimezone,
     );
     const attachment = new AttachmentBuilder(imageBuffer, { name: 'stats-leaderboard.png' });
     await interaction.editReply({
@@ -134,7 +143,7 @@ async function replyStatsLeaderboardImage(interaction, topicKey, period, limit) 
   } catch (err) {
     console.error('Error generating stats leaderboard image:', err);
     await interaction.editReply({
-      content: buildStatsLeaderboardContent(topicKey, period, top),
+      content: buildStatsLeaderboardContent(topicKey, period, top, defaultTimezone),
       embeds: [],
       files: [],
       components: [buildStatsLbPeriodRow(topicKey, period, limit)],
@@ -202,10 +211,11 @@ client.on('interactionCreate', async (interaction) => {
         const guildId = interaction.guildId;
         if (!guildId) return;
         await interaction.deferUpdate();
-        const stats = await getUserStats(guildId, targetUserId, period);
+        const tz = await gardenerTimezone(guildId, targetUserId);
+        const stats = await getUserStats(guildId, targetUserId, period, tz);
         const displayName = await getDisplayName(interaction.guild, targetUserId);
         await interaction.editReply({
-          embeds: [buildStatsEmbed(displayName, stats, period)],
+          embeds: [buildStatsEmbed(displayName, stats, period, tz)],
           components: [buildStatsPeriodRow(period, `${STATS_PERIOD_SELECT_ID}:${targetUserId}`)],
         });
         return;
@@ -267,12 +277,13 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         const period = 'lifetime';
-        const stats = await getUserStats(guildId, user.id, period);
+        const tz = await gardenerTimezone(guildId, user.id);
+        const stats = await getUserStats(guildId, user.id, period, tz);
         const displayName = user.id === interaction.user.id
           ? interaction.member.displayName
           : await getDisplayName(interaction.guild, user.id);
         await interaction.reply({
-          embeds: [buildStatsEmbed(displayName, stats, period)],
+          embeds: [buildStatsEmbed(displayName, stats, period, tz)],
           components: [buildStatsPeriodRow(period, `${STATS_PERIOD_SELECT_ID}:${user.id}`)],
         });
         return;
@@ -286,6 +297,29 @@ client.on('interactionCreate', async (interaction) => {
         });
         return;
       }
+    }
+
+    if (interaction.commandName === 'timezone') {
+      const guildId = interaction.guildId;
+      if (!guildId) {
+        await replyError(interaction, 'Timezone can only be set inside a server.');
+        return;
+      }
+
+      const zoneInput = interaction.options.getString('zone', true);
+      try {
+        const tz = await setUserTimezone(guildId, interaction.user.id, zoneInput);
+        await interaction.reply({
+          content: timezoneSetMessage(tz, interaction.user.id),
+        });
+      } catch (err) {
+        if (err.message === 'invalid_timezone') {
+          await replyError(interaction, timezoneInvalidMessage());
+          return;
+        }
+        throw err;
+      }
+      return;
     }
 
     if (interaction.commandName === 'garden') {
@@ -328,23 +362,6 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.editReply({
           content: truncateDiscordContent(syncCompleteMessage(result, errorText)),
         });
-        return;
-      }
-
-      if (subcommand === 'timezone') {
-        const zoneInput = interaction.options.getString('zone', true);
-        try {
-          const tz = await setUserTimezone(guildId, interaction.user.id, zoneInput);
-          await interaction.reply({
-            content: timezoneSetMessage(tz, interaction.user.id),
-          });
-        } catch (err) {
-          if (err.message === 'invalid_timezone') {
-            await replyError(interaction, timezoneInvalidMessage());
-            return;
-          }
-          throw err;
-        }
         return;
       }
 
@@ -411,7 +428,7 @@ client.on('interactionCreate', async (interaction) => {
 
         const useNicknames = interaction.options.getBoolean('use_nicknames');
 
-        const config = await updateGuildConfig(guildId, {
+        const { config, notes } = await updateGuildConfig(guildId, {
           spawnHour: interaction.options.getInteger('spawn_hour'),
           trickleEndHour: interaction.options.getInteger('trickle_end_hour'),
           settleHour: interaction.options.getInteger('settle_hour'),
@@ -420,12 +437,13 @@ client.on('interactionCreate', async (interaction) => {
           basePayout: interaction.options.getInteger('base_payout'),
           defaultTimezone,
           useNicknamesForChannels: useNicknames ?? undefined,
+          streakFreezesPerMonth: interaction.options.getInteger('streak_freezes_per_month'),
         });
 
         await syncAllGardenTopics(interaction.guild);
 
         await interaction.reply({
-          content: configUpdatedMessage(config),
+          content: configUpdatedMessage(config, notes),
         });
         return;
       }

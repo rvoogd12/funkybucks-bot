@@ -60,19 +60,18 @@ export const SETTLE_FAIL_LINES = [
   'The weeds are winning. **{remaining}** left — no funkybucks tonight.',
 ];
 
-export const FORFEIT_STALE_LINES = [
-  'Yesterday\'s weeds withered — streak reset. Fresh chaos arrives this morning!',
-  'Old weeds composted themselves. Streak reset — new day soon!',
-  'You left weeds out overnight. They wilted. Streak zeroed.',
-  'The garden forgives, but the streak does not. Weeds cleared, streak reset.',
-  'Stale weeds swept away. Start fresh when morning hits.',
-  'The weeds seem to have won yesterday. Streak reset.',
+export const SETTLE_FREEZE_LINES = [
+  'Streak freeze used! **{streak}**-day streak preserved. **{remaining}** freeze(s) left this month.',
+  'Close call — a streak freeze saved your **{streak}**-day streak. **{remaining}** freeze(s) remaining.',
+  'The weeds won today, but your streak didn\'t. **{streak}** days safe. **{remaining}** freeze(s) left.',
+  'No payout tonight, but your **{streak}**-day streak lives on. **{remaining}** freeze(s) this month.',
+  'Streak frozen at **{streak}** day(s). **{remaining}** freeze(s) left — pull harder tomorrow!',
 ];
 
 export const WELCOME_GARDEN_LINES = [
   'Welcome to your plot! Weeds spawn in the morning — pull all weeds before evening settlement for funkybucks. Others can visit, only you can pull.',
   'This is your garden. Delete weed messages to pull them. Clear the lot before settle time!',
-  'Home sweet garden. Set your timezone with `/garden timezone` so spawn times feel right.',
+  'Home sweet garden. Set your timezone with `/timezone` so spawn times feel right.',
   'Your garden is ready. Morning weeds, evening payout — neighbors can peek in anytime. >:3',
 ];
 
@@ -141,8 +140,8 @@ export function settleFailMessage({ remaining }) {
   return `🌙 ${fill(pickRandom(SETTLE_FAIL_LINES), { remaining })}`;
 }
 
-export function forfeitStaleMessage() {
-  return `🥀 ${pickRandom(FORFEIT_STALE_LINES)}`;
+export function settleFreezeUsedMessage({ streak, remaining }) {
+  return `🧊 ${fill(pickRandom(SETTLE_FREEZE_LINES), { streak, remaining })}`;
 }
 
 export function welcomeGardenMessage() {
@@ -165,7 +164,7 @@ export function gardenTopic(displayName, config) {
 }
 
 export function timezoneSetMessage(tz, userId = null) {
-  const line = `Garden timezone set to **${tz}**. Weeds use your local morning spawn and evening settlement.`;
+  const line = `Timezone set to **${tz}**. Gardens and stats use your local day.`;
   if (!userId) return line;
   return `<@${userId}> — ${line}`;
 }
@@ -222,8 +221,8 @@ export function buildStatusEmbed(status, displayName = null) {
         inline: true,
       },
       {
-        name: 'Streak',
-        value: `**${status.streak}** day(s) · **${status.perfectDaysThisMonth}** perfect days this month`,
+        name: 'Streak & Perfect Days',
+        value: `**${status.streak}** day(s) · **${status.perfectDaysThisMonth}** perfect days this month\n**${status.streakFreezesUsed}/${status.streakFreezesPerMonth}** freeze(s) used this month`,
         inline: true,
       },
     );
@@ -248,17 +247,22 @@ export function leaderboardEntryLine(entry) {
   return parts.join(' — ');
 }
 
-export function configUpdatedMessage(config) {
-  return [
+export function configUpdatedMessage(config, notes = []) {
+  const lines = [
     'Garden config updated:',
     `Spawn: **${config.spawnHour}:00** local`,
     `Trickle until: **${config.trickleEndHour}:00** local`,
     `Settle: **${config.settleHour}:00** local`,
     `Weeds/day: **${config.minWeeds}–${config.maxWeeds}**`,
     `Payout: **${formatNumber(config.basePayout)}** funkybucks`,
+    `Streak freezes/month: **${config.streakFreezesPerMonth ?? 5}**`,
     `Default timezone: **${config.defaultTimezone}**`,
     `Channel names: **${config.useNicknamesForChannels ? 'nicknames' : 'usernames'}**`,
-  ].join('\n');
+  ];
+  if (notes.length > 0) {
+    lines.push(`_Adjusted: ${notes.join('; ')}_`);
+  }
+  return lines.join('\n');
 }
 
 export function helpFooterMessage() {

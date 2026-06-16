@@ -9,7 +9,7 @@ export function startGardenScheduler(client, processTick) {
 
   const run = async () => {
     if (tickRunning) {
-      console.warn('Garden tick skipped — previous tick still running.');
+      console.warn('Garden tick skipped — previous tick still running (normal if a tick exceeds 60s).');
       return;
     }
     tickRunning = true;

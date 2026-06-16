@@ -81,6 +81,17 @@ const commandBuilders = [
         ),
     ),
   new SlashCommandBuilder()
+    .setName('timezone')
+    .setDescription('Set your local timezone for gardens and stats (eu, au, or IANA name)')
+    .setContexts(InteractionContextType.Guild)
+    .setIntegrationTypes(ApplicationIntegrationType.GuildInstall)
+    .addStringOption((option) =>
+      option
+        .setName('zone')
+        .setDescription('eu (Amsterdam aka most of Europe), au (Brisbane), Europe/Sydney, etc.')
+        .setRequired(true),
+    ),
+  new SlashCommandBuilder()
     .setName('garden')
     .setDescription('Manage your garden and pull weeds for funkybucks')
     .setContexts(InteractionContextType.Guild)
@@ -94,17 +105,6 @@ const commandBuilders = [
       sub
         .setName('sync')
         .setDescription('Mods only: create missing gardens and fix permissions, names, topics, etc.'),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName('timezone')
-        .setDescription('Set your garden timezone (eu, au, or IANA name)')
-        .addStringOption((option) =>
-          option
-            .setName('zone')
-            .setDescription('eu (Amsterdam aka most of Europe), au (Brisbane), Europe/Sydney, etc.')
-            .setRequired(true),
-        ),
     )
     .addSubcommand((sub) =>
       sub
@@ -138,10 +138,10 @@ const commandBuilders = [
           option.setName('settle_hour').setDescription('Local hour daily settlement (0-23)').setMinValue(0).setMaxValue(23),
         )
         .addIntegerOption((option) =>
-          option.setName('min_weeds').setDescription('Minimum weed messages per day').setMinValue(1).setMaxValue(50),
+          option.setName('min_weeds').setDescription('Minimum weed messages per day').setMinValue(1).setMaxValue(100),
         )
         .addIntegerOption((option) =>
-          option.setName('max_weeds').setDescription('Maximum weed messages per day').setMinValue(1).setMaxValue(50),
+          option.setName('max_weeds').setDescription('Maximum weed messages per day').setMinValue(1).setMaxValue(100),
         )
         .addIntegerOption((option) =>
           option.setName('base_payout').setDescription('Funkybucks for clearing all weeds').setMinValue(1).setMaxValue(10000),
@@ -153,6 +153,13 @@ const commandBuilders = [
           option
             .setName('use_nicknames')
             .setDescription('Use server nicknames for garden channel names (default: username)'),
+        )
+        .addIntegerOption((option) =>
+          option
+            .setName('streak_freezes_per_month')
+            .setDescription('Streak freezes per gardener per month (default: 5)')
+            .setMinValue(0)
+            .setMaxValue(31),
         ),
     ),
   new SlashCommandBuilder()

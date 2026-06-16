@@ -22,7 +22,7 @@ function drawStatsRankBadge(ctx, rank, y) {
   ctx.fillText(`#${rank}`, 50, y + 42);
 }
 
-export async function generateStatsLeaderboardImage(entries, topicKey, period, guildId, token) {
+export async function generateStatsLeaderboardImage(entries, topicKey, period, guildId, token, timezone = null) {
   registerLeaderboardFonts();
 
   const topic = STATS_LEADERBOARD_TOPICS[topicKey];
@@ -46,7 +46,7 @@ export async function generateStatsLeaderboardImage(entries, topicKey, period, g
 
   ctx.fillStyle = '#c9b8e8';
   ctx.font = font(15);
-  const subtitle = `${topic?.label ?? 'Stats'} — ${periodLabel(period)}`;
+  const subtitle = `${topic?.label ?? 'Stats'} — ${periodLabel(period, timezone)}`;
   ctx.fillText(subtitle, 30, 78);
 
   ctx.fillStyle = '#9b8ab8';

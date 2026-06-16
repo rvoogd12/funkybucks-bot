@@ -14,6 +14,8 @@ import {
   recordPerfectDay,
   recordMissedDay,
   recordLongestStreak,
+  recordStreakFreezeUsed,
+  getStatsForMonthKey,
   monthKeyForTimezone,
 } from './stats.js';
 import { acquireGardenTickLock } from './gardenLock.js';
@@ -23,7 +25,7 @@ import {
   trickleFlavorMessage,
   settleSuccessMessage,
   settleFailMessage,
-  forfeitStaleMessage,
+  settleFreezeUsedMessage,
   welcomeGardenMessage,
   rejoinGardenMessage,
   lockGardenMessage,
@@ -44,15 +46,20 @@ export const TZ_PRESETS = {
 export const DEFAULT_GUILD_CONFIG = {
   spawnHour: 8,
   trickleEndHour: 17,
-  settleHour: 20,
-  minWeeds: 15,
-  maxWeeds: 20,
+  settleHour: 21,
+  minWeeds: 45,
+  maxWeeds: 50,
   basePayout: 10,
   defaultTimezone: TZ_PRESETS.eu,
-  trickleIntervalMinutes: 45,
-  trickleBatchMax: 3,
+  trickleIntervalMinutes: 30,
+  trickleBatchMax: 8,
   useNicknamesForChannels: false,
+  streakFreezesPerMonth: 5,
 };
+
+const MIN_TRICKLE_GAP_MINUTES = 15;
+const MAX_WEEDS_PER_DAY = 100;
+const MAX_TRICKLE_BATCH = 8;
 
 const WEED_EMOJIS = ['🌿', '🌱', '🪴', '🍀', '🌵', '☘️'];
 
@@ -94,6 +101,9 @@ function ensureGuild(gardens, guildId) {
   }
   if (gardens[guildId].config.useNicknamesForChannels === undefined) {
     gardens[guildId].config.useNicknamesForChannels = DEFAULT_GUILD_CONFIG.useNicknamesForChannels;
+  }
+  if (gardens[guildId].config.streakFreezesPerMonth === undefined) {
+    gardens[guildId].config.streakFreezesPerMonth = DEFAULT_GUILD_CONFIG.streakFreezesPerMonth;
   }
   return gardens[guildId];
 }
@@ -237,6 +247,7 @@ function getGardenRecord(guildData, userId) {
       streak: 0,
       statsMonth: null,
       perfectDaysThisMonth: 0,
+      streakFreezesUsedThisMonth: 0,
       locked: false,
     };
   }
@@ -255,10 +266,133 @@ function localHour(timezone) {
   return DateTime.now().setZone(timezone).hour;
 }
 
+function monthKeyForSpawnDate(spawnDateIso, timezone) {
+  return DateTime.fromISO(spawnDateIso, { zone: timezone || 'utc' }).toFormat('yyyy-MM');
+}
+
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n));
+}
+
+function gardenTrickleInterval(garden, config) {
+  return garden.trickleIntervalMinutes ?? config.trickleIntervalMinutes ?? DEFAULT_GUILD_CONFIG.trickleIntervalMinutes;
+}
+
+function gardenTrickleBatchMax(config) {
+  return config.trickleBatchMax ?? DEFAULT_GUILD_CONFIG.trickleBatchMax;
+}
+
+function allDeliveredPulled(garden) {
+  const active = garden.activeWeeds || [];
+  const remaining = active.filter((w) => !w.pulled);
+  return active.length > 0
+    && remaining.length === 0
+    && (garden.trickleRemaining || 0) === 0;
+}
+
+function gardenNeedsSettle(garden) {
+  return Boolean(
+    garden.lastSpawnDate
+    && garden.settleCompletedDate !== garden.lastSpawnDate,
+  );
+}
+
+export function statsMonthKeyForGardenDay(garden, fallbackTz) {
+  if (garden.spawnStatsMonthKey) return garden.spawnStatsMonthKey;
+  const tz = garden.spawnTimezone || garden.timezone || fallbackTz;
+  if (garden.lastSpawnDate) return monthKeyForSpawnDate(garden.lastSpawnDate, tz);
+  return monthKeyForTimezone(tz);
+}
+
+function canSettleGarden(garden, hour, settleHour) {
+  if (!gardenNeedsSettle(garden)) return false;
+  if (hour >= settleHour) return true;
+  return allDeliveredPulled(garden);
+}
+
+/** Calendar rollover only — used while garden is locked (no gameplay). */
+function touchGardenCalendar(garden, timezone) {
+  const month = monthKeyForTimezone(timezone);
+  if (garden.statsMonth === month) return false;
+  garden.statsMonth = month;
+  garden.perfectDaysThisMonth = 0;
+  garden.streakFreezesUsedThisMonth = 0;
+  return true;
+}
+
+function updateMonthlyStatsForSpawn(garden, spawnDay, timezone) {
+  const spawnMonth = monthKeyForSpawnDate(spawnDay, timezone);
+  const currentMonth = monthKeyForTimezone(timezone);
+  if (spawnMonth === currentMonth) {
+    touchGardenCalendar(garden, timezone);
+  }
+}
+
+function trickleWindowMinutes(spawnHour, trickleEndHour, timezone) {
+  const now = DateTime.now().setZone(timezone);
+  const start = now.set({ hour: spawnHour, minute: 0, second: 0, millisecond: 0 });
+  let end = now.set({ hour: trickleEndHour, minute: 0, second: 0, millisecond: 0 });
+  if (end <= start) {
+    end = end.plus({ days: 1 });
+  }
+  return Math.max(60, end.diff(start, 'minutes').minutes);
+}
+
+function deriveTrickleIntervalMinutes(trickleRemaining, config, timezone) {
+  const spawnHour = config.spawnHour;
+  const trickleEnd = config.trickleEndHour ?? DEFAULT_GUILD_CONFIG.trickleEndHour;
+  const batchMax = gardenTrickleBatchMax(config);
+  const windowMins = trickleWindowMinutes(spawnHour, trickleEnd, timezone);
+  const buffer = trickleFinishBufferMinutes(trickleRemaining);
+  const batches = Math.max(1, Math.ceil(trickleRemaining / (batchMax * 0.65)));
+  const derived = Math.floor((windowMins - buffer) / batches);
+  return clamp(derived, MIN_TRICKLE_GAP_MINUTES, 45);
+}
+
 function minutesUntilTrickleEnd(timezone, trickleEndHour) {
   const now = DateTime.now().setZone(timezone);
   const end = now.set({ hour: trickleEndHour, minute: 0, second: 0, millisecond: 0 });
   return end.diff(now, 'minutes').minutes;
+}
+
+/** Minutes before trickle-end hour by which all weeds should be delivered. */
+function trickleFinishBufferMinutes(trickleRemaining) {
+  if (trickleRemaining >= 10) return 15;
+  if (trickleRemaining >= 4) return 5;
+  return 2;
+}
+
+function trickleBatchesRemaining(trickleRemaining, trickleBatchMax) {
+  return Math.ceil(trickleRemaining / trickleBatchMax);
+}
+
+/**
+ * True when remaining weeds cannot all be sent at the normal interval before the
+ * finish buffer — switch to a spread-out finish schedule instead of one dump.
+ */
+function shouldEnterFinishWindow(minsLeft, trickleRemaining, trickleBatchMax) {
+  const buffer = trickleFinishBufferMinutes(trickleRemaining);
+  const batchesLeft = trickleBatchesRemaining(trickleRemaining, trickleBatchMax);
+  const minPaceMinutes = batchesLeft > 1
+    ? (batchesLeft - 1) * MIN_TRICKLE_GAP_MINUTES + 1
+    : 0;
+  if (minsLeft <= minPaceMinutes + buffer) return true;
+  return false;
+}
+
+/** Gap until the next finish-window batch — averaged with jitter, not a fixed cadence. */
+function computeFinishTrickleGap(minsLeft, trickleRemaining, trickleBatchMax, trickleIntervalMinutes) {
+  const buffer = trickleFinishBufferMinutes(trickleRemaining);
+  if (minsLeft <= buffer) return 0;
+
+  const batchesLeft = trickleBatchesRemaining(trickleRemaining, trickleBatchMax);
+  if (batchesLeft <= 1) return 0;
+
+  const usable = Math.max(1, minsLeft - buffer);
+  const avg = usable / batchesLeft;
+  const jitter = 0.65 + Math.random() * 0.7;
+  const gap = avg * jitter;
+  return Math.max(MIN_TRICKLE_GAP_MINUTES, Math.min(gap, trickleIntervalMinutes));
 }
 
 function effectiveTrickleRemaining(garden, timezone, trickleEndHour) {
@@ -269,11 +403,8 @@ function effectiveTrickleRemaining(garden, timezone, trickleEndHour) {
 }
 
 function updateMonthlyStats(garden) {
-  const month = DateTime.now().setZone(garden.timezone || DEFAULT_GUILD_CONFIG.defaultTimezone).toFormat('yyyy-MM');
-  if (garden.statsMonth !== month) {
-    garden.statsMonth = month;
-    garden.perfectDaysThisMonth = 0;
-  }
+  const tz = garden.timezone || DEFAULT_GUILD_CONFIG.defaultTimezone;
+  touchGardenCalendar(garden, tz);
 }
 
 function buildPermissionOverwrites(guild, ownerId, botMember) {
@@ -577,8 +708,10 @@ export async function markWeedPulled(guildId, channelId, messageId) {
   if (!weed) return false;
 
   weed.pulled = true;
+  const tz = garden.timezone || guildData.config.defaultTimezone;
+  const monthKey = statsMonthKeyForGardenDay(garden, guildData.config.defaultTimezone);
   await saveGardens(gardens);
-  await recordWeedCleared(guildId, ownerId);
+  await recordWeedCleared(guildId, ownerId, monthKey);
   return true;
 }
 
@@ -620,10 +753,19 @@ export async function spawnWeedsForGarden(client, guild, userId, guildData) {
   if (!channel) return false;
 
   const config = guildData.config;
+  const spawnTz = garden.timezone || config.defaultTimezone;
   const totalWeeds = randomInt(config.minWeeds, config.maxWeeds);
   const burstCount = Math.ceil(totalWeeds * 0.5);
   garden.trickleRemaining = totalWeeds - burstCount;
   garden.lastTrickleAt = DateTime.now().toISO();
+  garden.trickleNextGapMinutes = null;
+  garden.trickleIntervalMinutes = deriveTrickleIntervalMinutes(
+    garden.trickleRemaining,
+    config,
+    spawnTz,
+  );
+  garden.spawnTimezone = spawnTz;
+  garden.spawnStatsMonthKey = monthKeyForSpawnDate(today, spawnTz);
   garden.activeWeeds = [];
 
   await channel.send(spawnFlavorMessage());
@@ -634,18 +776,37 @@ export async function spawnWeedsForGarden(client, guild, userId, guildData) {
   return true;
 }
 
-async function flushTrickleWeeds(guild, userId, guildData) {
+async function sendTrickleBatch(guild, userId, guildData, { finishWindow = false } = {}) {
   const garden = guildData.gardens[userId];
-  if (!garden?.channelId || garden.locked || garden.trickleRemaining <= 0) return false;
-
+  const config = guildData.config;
   const channel = guild.channels.cache.get(garden.channelId)
     ?? await guild.channels.fetch(garden.channelId).catch(() => null);
   if (!channel) return false;
 
-  const count = garden.trickleRemaining;
-  await sendWeedMessages(channel, count, garden);
-  garden.trickleRemaining = 0;
+  const batchMax = gardenTrickleBatchMax(config);
+  const batch = Math.min(
+    randomInt(1, batchMax),
+    garden.trickleRemaining,
+  );
+  await channel.send(trickleFlavorMessage());
+  await sendWeedMessages(channel, batch, garden);
+  garden.trickleRemaining -= batch;
   garden.lastTrickleAt = DateTime.now().toISO();
+
+  if (finishWindow && garden.trickleRemaining > 0) {
+    const tz = garden.timezone || config.defaultTimezone;
+    const trickleEnd = config.trickleEndHour ?? DEFAULT_GUILD_CONFIG.trickleEndHour;
+    const minsLeft = minutesUntilTrickleEnd(tz, trickleEnd);
+    garden.trickleNextGapMinutes = computeFinishTrickleGap(
+      minsLeft,
+      garden.trickleRemaining,
+      batchMax,
+      gardenTrickleInterval(garden, config),
+    );
+  } else {
+    garden.trickleNextGapMinutes = null;
+  }
+
   return true;
 }
 
@@ -656,71 +817,56 @@ export async function trickleWeedsForGarden(guild, userId, guildData) {
   const today = localToday(garden.timezone);
   if (garden.lastSpawnDate !== today) return false;
 
-  const hour = localHour(garden.timezone);
   const config = guildData.config;
   const trickleEnd = config.trickleEndHour ?? DEFAULT_GUILD_CONFIG.trickleEndHour;
-  if (hour < config.spawnHour || hour >= trickleEnd) {
-    if (hour >= trickleEnd) {
-      garden.trickleRemaining = 0;
-    }
-    return false;
-  }
+  const hour = localHour(garden.timezone);
+
+  if (hour < config.spawnHour || hour >= trickleEnd) return false;
+
+  const tz = garden.timezone || config.defaultTimezone;
+  const batchMax = gardenTrickleBatchMax(config);
+  const interval = gardenTrickleInterval(garden, config);
+  const minsLeft = minutesUntilTrickleEnd(tz, trickleEnd);
+  const finishWindow = shouldEnterFinishWindow(minsLeft, garden.trickleRemaining, batchMax);
 
   const lastTrickle = garden.lastTrickleAt
     ? DateTime.fromISO(garden.lastTrickleAt)
     : null;
   const minutesSince = lastTrickle
     ? DateTime.now().diff(lastTrickle, 'minutes').minutes
-    : config.trickleIntervalMinutes;
+    : interval;
 
-  if (minutesSince < config.trickleIntervalMinutes) return false;
-
-  const channel = guild.channels.cache.get(garden.channelId)
-    ?? await guild.channels.fetch(garden.channelId).catch(() => null);
-  if (!channel) return false;
-
-  const batch = Math.min(
-    randomInt(1, config.trickleBatchMax),
-    garden.trickleRemaining,
-  );
-  await channel.send(trickleFlavorMessage());
-  await sendWeedMessages(channel, batch, garden);
-  garden.trickleRemaining -= batch;
-  garden.lastTrickleAt = DateTime.now().toISO();
-  return true;
-}
-
-async function forfeitStaleGarden(guild, userId, guildData) {
-  const garden = guildData.gardens[userId];
-  if (!garden?.channelId || garden.activeWeeds.length === 0) return;
-
-  const channel = guild.channels.cache.get(garden.channelId)
-    ?? await guild.channels.fetch(garden.channelId).catch(() => null);
-
-  const remaining = garden.activeWeeds.filter((w) => !w.pulled);
-  garden.streak = 0;
-
-  if (channel && remaining.length > 0) {
-    for (const weed of remaining) {
-      await channel.messages.delete(weed.messageId).catch(() => {});
+  let requiredGap;
+  if (finishWindow) {
+    const buffer = trickleFinishBufferMinutes(garden.trickleRemaining);
+    if (minsLeft <= buffer) {
+      requiredGap = 0;
+    } else if (garden.trickleNextGapMinutes != null) {
+      requiredGap = garden.trickleNextGapMinutes;
+    } else {
+      requiredGap = computeFinishTrickleGap(
+        minsLeft,
+        garden.trickleRemaining,
+        batchMax,
+        interval,
+      );
     }
-    await channel.send(forfeitStaleMessage());
+  } else {
+    garden.trickleNextGapMinutes = null;
+    requiredGap = interval;
   }
 
-  garden.activeWeeds = [];
-  garden.trickleRemaining = 0;
-  garden.lastTrickleAt = null;
-  if (garden.lastSpawnDate) {
-    garden.lastSettleDate = garden.lastSpawnDate;
-  }
+  if (minutesSince < requiredGap) return false;
+
+  return sendTrickleBatch(guild, userId, guildData, { finishWindow });
 }
 
 export async function settleGarden(client, guild, userId, guildData, excludeBotId = null) {
   const garden = guildData.gardens[userId];
   if (!garden?.channelId) return null;
 
-  const today = localToday(garden.timezone);
-  if (garden.settleCompletedDate === today) return null;
+  const spawnDay = garden.lastSpawnDate;
+  if (!spawnDay || garden.settleCompletedDate === spawnDay) return null;
 
   const channel = guild.channels.cache.get(garden.channelId)
     ?? await guild.channels.fetch(garden.channelId).catch(() => null);
@@ -728,28 +874,48 @@ export async function settleGarden(client, guild, userId, guildData, excludeBotI
   await reconcileWeeds(channel, garden);
 
   const remaining = garden.activeWeeds.filter((w) => !w.pulled);
-  const allPulled = garden.activeWeeds.length > 0 && remaining.length === 0;
+  const deliveredPulled = allDeliveredPulled(garden);
   const config = guildData.config;
   let payout = 0;
 
-  updateMonthlyStats(garden);
-
   const tz = garden.timezone || config.defaultTimezone;
-  const statsMonthKey = monthKeyForTimezone(tz);
+  const statsMonthKey = statsMonthKeyForGardenDay(garden, config.defaultTimezone);
+  const currentMonth = monthKeyForTimezone(tz);
+  const spawnMonthMatchesNow = statsMonthKey === currentMonth;
 
-  if (allPulled) {
+  updateMonthlyStatsForSpawn(garden, spawnDay, garden.spawnTimezone || tz);
+
+  let freezeUsed = false;
+
+  if (deliveredPulled) {
     payout = config.basePayout;
     garden.streak = (garden.streak || 0) + 1;
-    garden.perfectDaysThisMonth = (garden.perfectDaysThisMonth || 0) + 1;
+    if (spawnMonthMatchesNow) {
+      garden.perfectDaysThisMonth = (garden.perfectDaysThisMonth || 0) + 1;
+    }
     if (!garden.locked && !(excludeBotId && userId === excludeBotId)) {
       await addBalance(guild.id, userId, payout, excludeBotId);
       await recordPerfectDay(guild.id, userId, payout, statsMonthKey);
       await recordLongestStreak(guild.id, userId, garden.streak, statsMonthKey);
     }
   } else if (garden.activeWeeds.length > 0) {
-    garden.streak = 0;
-    if (!garden.locked && !(excludeBotId && userId === excludeBotId)) {
-      await recordMissedDay(guild.id, userId, statsMonthKey);
+    const total = config.streakFreezesPerMonth ?? DEFAULT_GUILD_CONFIG.streakFreezesPerMonth;
+    const spawnMonthStats = await getStatsForMonthKey(guild.id, userId, statsMonthKey);
+    const freezesUsedInSpawnMonth = spawnMonthStats.streakFreezesUsed || 0;
+    if (freezesUsedInSpawnMonth < total) {
+      freezeUsed = true;
+      if (spawnMonthMatchesNow) {
+        garden.streakFreezesUsedThisMonth = freezesUsedInSpawnMonth + 1;
+      }
+      if (!garden.locked && !(excludeBotId && userId === excludeBotId)) {
+        await recordStreakFreezeUsed(guild.id, userId, statsMonthKey);
+        await recordMissedDay(guild.id, userId, statsMonthKey);
+      }
+    } else {
+      garden.streak = 0;
+      if (!garden.locked && !(excludeBotId && userId === excludeBotId)) {
+        await recordMissedDay(guild.id, userId, statsMonthKey);
+      }
     }
   }
 
@@ -760,20 +926,35 @@ export async function settleGarden(client, guild, userId, guildData, excludeBotI
   }
 
   if (channel && !garden.locked) {
-    if (allPulled) {
+    if (deliveredPulled) {
       await channel.send(settleSuccessMessage({ payout, streak: garden.streak }));
     } else if (garden.activeWeeds.length > 0) {
-      await channel.send(settleFailMessage({ remaining: remaining.length }));
+      if (freezeUsed) {
+        const total = config.streakFreezesPerMonth ?? DEFAULT_GUILD_CONFIG.streakFreezesPerMonth;
+        const usedDisplay = spawnMonthMatchesNow
+          ? garden.streakFreezesUsedThisMonth
+          : (await getStatsForMonthKey(guild.id, userId, statsMonthKey)).streakFreezesUsed;
+        await channel.send(settleFreezeUsedMessage({
+          streak: garden.streak,
+          remaining: total - usedDisplay,
+        }));
+      } else {
+        await channel.send(settleFailMessage({ remaining: remaining.length }));
+      }
     }
   }
 
   garden.activeWeeds = [];
   garden.trickleRemaining = 0;
   garden.lastTrickleAt = null;
-  garden.lastSettleDate = today;
-  garden.settleCompletedDate = today;
+  garden.trickleNextGapMinutes = null;
+  garden.trickleIntervalMinutes = null;
+  garden.spawnStatsMonthKey = null;
+  garden.spawnTimezone = null;
+  garden.lastSettleDate = spawnDay;
+  garden.settleCompletedDate = spawnDay;
 
-  return { allPulled, payout, remaining: remaining.length, streak: garden.streak };
+  return { allPulled: deliveredPulled, payout, remaining: remaining.length, streak: garden.streak };
 }
 
 export async function processGardenTick(client, guildId) {
@@ -788,27 +969,19 @@ export async function processGardenTick(client, guildId) {
   let changed = false;
 
   for (const [userId, garden] of Object.entries(guildData.gardens)) {
-    if (garden.locked || !garden.channelId) continue;
+    if (!garden.channelId) continue;
 
     const tz = garden.timezone || guildData.config.defaultTimezone;
     const today = localToday(tz);
     const hour = localHour(tz);
     const config = guildData.config;
 
-    if (
-      garden.lastSpawnDate
-      && garden.lastSpawnDate !== today
-      && garden.activeWeeds.length > 0
-    ) {
-      await forfeitStaleGarden(guild, userId, guildData);
-      changed = true;
+    if (garden.locked) {
+      if (touchGardenCalendar(garden, tz)) changed = true;
+      continue;
     }
 
-    if (
-      hour >= config.settleHour
-      && garden.settleCompletedDate !== today
-      && garden.lastSpawnDate === today
-    ) {
+    if (canSettleGarden(garden, hour, config.settleHour)) {
       await settleGarden(client, guild, userId, guildData, client.user?.id);
       changed = true;
       continue;
@@ -818,6 +991,7 @@ export async function processGardenTick(client, guildId) {
       hour >= config.spawnHour
       && hour < config.settleHour
       && garden.spawnCompletedDate !== today
+      && !gardenNeedsSettle(garden)
     ) {
       const spawned = await spawnWeedsForGarden(client, guild, userId, guildData);
       if (spawned) changed = true;
@@ -826,24 +1000,24 @@ export async function processGardenTick(client, guildId) {
 
     const trickleEnd = config.trickleEndHour ?? DEFAULT_GUILD_CONFIG.trickleEndHour;
     if (
+      hour >= trickleEnd
+      && garden.lastSpawnDate === today
+      && garden.trickleRemaining > 0
+    ) {
+      garden.trickleRemaining = 0;
+      garden.trickleNextGapMinutes = null;
+      changed = true;
+    }
+
+    if (
       hour >= config.spawnHour
       && hour < config.settleHour
       && garden.lastSpawnDate === today
       && garden.trickleRemaining > 0
+      && hour < trickleEnd
     ) {
-      if (hour >= trickleEnd) {
-        garden.trickleRemaining = 0;
-        changed = true;
-      } else {
-        const minsLeft = minutesUntilTrickleEnd(tz, trickleEnd);
-        if (minsLeft <= config.trickleIntervalMinutes) {
-          const flushed = await flushTrickleWeeds(guild, userId, guildData);
-          if (flushed) changed = true;
-        } else {
-          const trickled = await trickleWeedsForGarden(guild, userId, guildData);
-          if (trickled) changed = true;
-        }
-      }
+      const trickled = await trickleWeedsForGarden(guild, userId, guildData);
+      if (trickled) changed = true;
     }
   }
 
@@ -907,6 +1081,7 @@ export async function getGardenStatus(guildId, userId) {
   const total = active.length;
   const trickleEndHour = config.trickleEndHour ?? DEFAULT_GUILD_CONFIG.trickleEndHour;
   const trickle = effectiveTrickleRemaining(garden, tz, trickleEndHour);
+  const streakFreezesPerMonth = config.streakFreezesPerMonth ?? DEFAULT_GUILD_CONFIG.streakFreezesPerMonth;
 
   return {
     hasGarden: true,
@@ -918,6 +1093,8 @@ export async function getGardenStatus(guildId, userId) {
     estimatedTotal: total + trickle,
     streak: garden.streak || 0,
     perfectDaysThisMonth: garden.perfectDaysThisMonth || 0,
+    streakFreezesUsed: garden.streakFreezesUsedThisMonth || 0,
+    streakFreezesPerMonth,
     lastSpawnDate: garden.lastSpawnDate,
     lastSettleDate: garden.lastSettleDate,
     spawnHour: config.spawnHour,
@@ -936,7 +1113,7 @@ export async function updateGuildConfig(guildId, updates) {
   const allowed = [
     'spawnHour', 'trickleEndHour', 'settleHour', 'minWeeds', 'maxWeeds',
     'basePayout', 'defaultTimezone', 'trickleIntervalMinutes', 'trickleBatchMax',
-    'useNicknamesForChannels',
+    'useNicknamesForChannels', 'streakFreezesPerMonth',
   ];
 
   for (const key of allowed) {
@@ -949,8 +1126,10 @@ export async function updateGuildConfig(guildId, updates) {
     guildData.config.maxWeeds = guildData.config.minWeeds;
   }
 
+  const notes = validateGuildConfig(guildData.config);
+
   await saveGardens(gardens);
-  return guildData.config;
+  return { config: guildData.config, notes };
 }
 
 export async function getGuildConfig(guildId) {
@@ -959,12 +1138,58 @@ export async function getGuildConfig(guildId) {
   return { ...guildData.config };
 }
 
+function validateGuildConfig(config) {
+  const notes = [];
+  config.minWeeds = clamp(Number(config.minWeeds) || DEFAULT_GUILD_CONFIG.minWeeds, 1, MAX_WEEDS_PER_DAY);
+  config.maxWeeds = clamp(Number(config.maxWeeds) || DEFAULT_GUILD_CONFIG.maxWeeds, 1, MAX_WEEDS_PER_DAY);
+  if (config.minWeeds > config.maxWeeds) {
+    config.maxWeeds = config.minWeeds;
+    notes.push('max weeds raised to match min');
+  }
+  config.trickleBatchMax = clamp(
+    Number(config.trickleBatchMax) || DEFAULT_GUILD_CONFIG.trickleBatchMax,
+    1,
+    MAX_TRICKLE_BATCH,
+  );
+  config.trickleIntervalMinutes = clamp(
+    Number(config.trickleIntervalMinutes) || DEFAULT_GUILD_CONFIG.trickleIntervalMinutes,
+    MIN_TRICKLE_GAP_MINUTES,
+    45,
+  );
+
+  if (config.spawnHour >= config.settleHour) {
+    config.settleHour = Math.min(23, config.spawnHour + 1);
+    notes.push('settle hour adjusted above spawn hour');
+  }
+  if (config.trickleEndHour <= config.spawnHour) {
+    config.trickleEndHour = Math.min(config.settleHour, config.spawnHour + 1);
+    notes.push('trickle end hour adjusted above spawn hour');
+  }
+  if (config.trickleEndHour > config.settleHour) {
+    config.trickleEndHour = config.settleHour;
+    notes.push('trickle end hour capped at settle hour');
+  }
+
+  return notes;
+}
+
+export async function getGardenerTimezoneMap(guildId) {
+  const gardens = await loadGardens();
+  const guildData = gardens[guildId];
+  const defaultTimezone = guildData?.config?.defaultTimezone ?? DEFAULT_GUILD_CONFIG.defaultTimezone;
+  const timezones = {};
+  for (const [userId, garden] of Object.entries(guildData?.gardens ?? {})) {
+    timezones[userId] = garden.timezone || defaultTimezone;
+  }
+  return { defaultTimezone, timezones };
+}
+
 export async function getGardenLeaderboard(guild, { limit = null, excludeBotId = null } = {}) {
   const gardens = await loadGardens();
   const guildData = gardens[guild.id];
   const gardenMap = guildData?.gardens || {};
-  const currentMonth = DateTime.now().toFormat('yyyy-MM');
   const members = await getMemberMap(guild);
+  const defaultTz = guildData?.config?.defaultTimezone ?? DEFAULT_GUILD_CONFIG.defaultTimezone;
 
   const entries = [];
   for (const member of members.values()) {
@@ -972,6 +1197,8 @@ export async function getGardenLeaderboard(guild, { limit = null, excludeBotId =
     if (excludeBotId && member.id === excludeBotId) continue;
 
     const garden = gardenMap[member.id];
+    const tz = garden?.timezone || defaultTz;
+    const currentMonth = monthKeyForTimezone(tz);
     entries.push({
       userId: member.id,
       streak: garden?.streak || 0,
